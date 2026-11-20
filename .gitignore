@@ -15,6 +15,11 @@ wheels/
 .env.*
 !.env.example
 
+# ===== 本地启动工具（依赖本机 SSH 免密，不入库）=====
+local_run.py
+本地启动后端.bat
+验收-*.png
+
 # ===== 大文件 / 临时产物 =====
 cloudflared.exe
 *.tar.gz

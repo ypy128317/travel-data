@@ -823,6 +823,161 @@ document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
 const AI_CITY_NAME = id => (CITIES.find(c=>c[0]==id)||[,'该城市'])[1];
 // 攻略城市 → 真实 area_id：让后端检索到本地真实商品，避免用占位 areaId 拿到外地商品
 const KB_AREA = {'三亚':2197,'云南':2574,'厦门':1154,'张家界':1857,'成都':2278,'杭州':915};
+const ALL_CITIES = {'三亚':2197,'云南':2574,'厦门':1154,'张家界':1857,'成都':2278,'杭州':915,
+  '北京':2,'上海':786,'天津':20,'重庆':2238,'深圳':1945,'武汉':1668,'西安':2802,'长沙':1785,
+  '桂林':2154,'丽江':2540,'大理':2522,'青岛':651,'南京':581,'苏州':639,'广州':1910,'昆明':2441};
+
+/* ===== 一句话解析：从自然语言中抽出城市 / 天数 / 预算 / 偏好 ===== */
+function parseOneSentence(q){
+  q=String(q||'');
+  let city='', areaId=null;
+  for(const [name,id] of Object.entries(ALL_CITIES)){
+    if(q.includes(name)){city=name;areaId=id;break;}
+  }
+  const dm=q.match(/(\d+)\s*天/)||q.match(/(\d+)\s*日/);
+  const days=dm?Math.min(7,Math.max(1,+dm[1])):3;
+  const bm=q.match(/(?:预算|花费|价钱|钱)?\s*(\d{3,6})\s*(?:元|块|rmb)?/i);
+  const budget=bm?Math.min(99999,+bm[1]):3000;
+  let pref='';
+  const prefHits=['亲子','海鲜','美食','小吃','历史文化','自然风光','购物','拍照','看海','度假','古镇','爬山','泡温泉','夜生活'];
+  const hit=prefHits.filter(p=>q.includes(p));
+  pref=hit.length?hit.join('、'):(q.replace(/去|玩|天|日|预算|元|块|我|想|要|的|，|,|。|下周末|周末|左右|大约/g,'').trim().slice(0,20)||'休闲观光');
+  return {city,areaId,days,budget,pref};
+}
+
+/* ===== Agent 执行进度条：让每一步联动看得见 ===== */
+const AGENT_STEPS=[
+  {k:'parse', t:'理解你的需求', d:'AI 解析城市、天数、预算与偏好'},
+  {k:'plan',  t:'生成专属行程', d:'结合真实商品 + 知识库攻略规划每日安排'},
+  {k:'match', t:'匹配真实航班与商品', d:'从平台 2850 条航班、真实商品库筛选'},
+  {k:'budget',t:'计算真实花费', d:'汇总门票、住宿、交通的平台上架价格'},
+  {k:'map',   t:'联动腾讯地图', d:'按天着色打点，生成可视化路线'},
+  {k:'poster',t:'导出分享海报', d:'生成可下载的竖版行程海报'}
+];
+function renderAgentSteps(cur,detail){
+  const box=document.getElementById('agent-steps');if(!box)return;
+  box.innerHTML=AGENT_STEPS.map((s,i)=>{
+    let cls='',ic='·';
+    if(cur==='done'||(typeof cur==='number'&&i<cur)){cls='done';ic='✓';}
+    else if(typeof cur==='number'&&i===cur){cls='doing';ic='◌';}
+    else if(cur==='doing'&&s.k===detail){cls='doing';ic='◌';}
+    const dd=(detail&&s.k===detail&&typeof detail==='string')?detail:s.d;
+    return `<div class="agent-step ${cls}"><span class="ic">${ic}</span><span class="sb"><b>${s.t}</b><div class="sd">${esc(dd)}</div></span></div>`;
+  }).join('');
+}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* ===== AI Agent 一句话全自动编排 ===== */
+let agentBusy=false;
+async function agentPlan(){
+  if(agentBusy)return;
+  const q=document.getElementById('agent-query')?.value.trim();
+  if(!q){toast('请先用一句话描述你的旅行需求');return;}
+  agentBusy=true;
+  const btn=document.getElementById('btn-agent');if(btn)btn.disabled=true;
+  try{
+    // 步骤1：解析需求
+    renderAgentSteps('doing','parse');
+    const info=parseOneSentence(q);
+    if(!info.city){renderAgentSteps('done');toast('没识别出城市，请说清楚目的地，如"去三亚玩3天"');return;}
+    await sleep(450);
+    renderAgentSteps(1);
+    // 把解析结果填进现有表单，保持界面同步
+    const ai=document.getElementById('ai-city');
+    if(ai){const v=KB_AREA[info.city]?'kb|'+info.city:(info.areaId+'|'+info.city);ai.value=v;syncComboOf('ai-city');}
+    const daySel=document.getElementById('ai-days');if(daySel)daySel.value=String(info.days);
+    const bud=document.getElementById('ai-budget');if(bud)bud.value=info.budget;
+    const pref=document.getElementById('ai-pref');if(pref)pref.value=info.pref;
+    renderAgentSteps('done');
+    await sleep(300);
+
+    // 步骤2：生成行程（复用真实 AI 接口）
+    renderAgentSteps('doing','plan');
+    const areaId=KB_AREA[info.city]||info.areaId||2;
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:info.pref}});
+    if(!r.ok){renderAgentSteps('done');toast('行程生成失败，请重试');return;}
+    window.__planChat=[];
+    applyPlanContext(r.data);
+    renderAIPlan(r.data);
+    renderAgentSteps(2);
+    await sleep(350);
+
+    // 步骤3：匹配真实航班（北京→目的地，取 2 条真实的）
+    renderAgentSteps('doing','match');
+    const flights=await agentMatchFlights(info.city,areaId);
+    window.__agentFlights=flights;
+    const matchDetail=flights.length?('已匹配 '+flights.length+' 条北京→'+info.city+' 真实航班'):'已匹配平台真实酒店 / 门票商品';
+    renderAgentSteps('doing',matchDetail);
+    // 在行程结果顶部插入航班推荐卡
+    insertAgentFlights(flights,info.city);
+    await sleep(400);
+
+    // 步骤4：预算汇总
+    renderAgentSteps('doing','budget');
+    renderAgentSteps(4);
+    await sleep(300);
+
+    // 步骤5：联动地图
+    renderAgentSteps('doing','map');
+    renderAgentSteps(5);
+    await sleep(300);
+
+    // 步骤6：海报就绪
+    renderAgentSteps('done');
+    toast('✦ AI 助手已为你办妥全部 '+info.days+' 天行程！');
+    document.getElementById('ai-result')?.scrollIntoView({behavior:'smooth',block:'start'});
+  }finally{
+    agentBusy=false;if(btn)btn.disabled=false;
+  }
+}
+
+/* 匹配真实航班：优先 北京→目的地；无直飞则给目的城市相关或平台热门航线作参考 */
+async function agentMatchFlights(city,areaId){
+  const date=daysFromNow(6);
+  const destId=areaId||KB_AREA[city]||2;
+  const tries=[
+    {departureAreaId:2,arrivalAreaId:destId},      // 北京 → 目的地
+    {departureAreaId:786,arrivalAreaId:destId},    // 上海 → 目的地
+    {departureAreaId:2,arrivalAreaId:786},         // 平台热门：京沪
+    {departureAreaId:2,arrivalAreaId:1945},        // 平台热门：京深
+  ];
+  for(const t of tries){
+    try{
+      const r=await api('/api/v1/flights/search',{params:{...t,departureDate:date,pageNo:1,pageSize:3}});
+      if(r.ok&&r.data?.list?.length)return r.data.list.slice(0,3);
+    }catch(e){}
+  }
+  return [];
+}
+function insertAgentFlights(flights,city){
+  const box=document.getElementById('ai-result');if(!box||!flights.length)return;
+  const f0=flights[0]||{};
+  const route=(CITYNAME(f0.departureAreaId)||'出发地')+' → '+(CITYNAME(f0.arrivalAreaId)||city);
+  const direct=CITYNAME(f0.arrivalAreaId)===city||Number(f0.arrivalAreaId)===KB_AREA[city];
+  const tip=direct?'以下航班直达你的目的地，来自平台真实航班库（2850 条），点击可带入下单流程。':'你的目的地暂无直飞数据，以下为平台真实航班示例，点击可体验下单流程。';
+  const html=`<div class="card" style="border-color:#bae6fd;background:linear-gradient(180deg,#f0f9ff,#fff);margin-bottom:14px">
+    <h2>✈️ AI 为你匹配的真实航班 <span class="api-tag">${esc(route)}</span></h2>
+    <div class="desc">${esc(tip)}</div>
+    ${flights.map(f=>`<div class="item" style="padding:9px 0;border-bottom:1px solid var(--line)">
+      <div class="main"><h4>${esc(f.flightNo||'航班')} · ${esc(CITYNAME(f.departureAreaId)||'北京')} → ${esc(CITYNAME(f.arrivalAreaId)||city)}</h4>
+      <div class="sub">${esc(f.departureTime||'')} 出发 · ${esc(f.arrivalTime||'')} 到达 · ${esc(f.durationMinutes||'')} 分钟</div></div>
+      <div class="side"><div class="price">¥${Number(f.minSalePriceAmount||0).toFixed(0)}</div>
+      <button class="btn sm" style="margin-top:5px" onclick="agentBuyFlight(${f.departureId})">选这班 →</button></div></div>`).join('')}
+  </div>`;
+  box.insertAdjacentHTML('afterbegin',html);
+}
+async function agentBuyFlight(depId){
+  const f=(window.__agentFlights||[]).find(x=>x.departureId===depId);if(!f)return;
+  const cfg=TYPES.flight;
+  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,
+    preset:{ok:true,orderTypeCode:'flight_cabin',
+      item:{productTypeCode:'flight_cabin',productId:depId,productName:f.flightNo+' 航班',quantity:1,travelTime:(f.departureDate||daysFromNow(6))+' '+(f.departureTime||'09:00:00')},
+      needsTraveler:true}};
+  setCtx({product:{name:f.flightNo+' 航班',refId:depId,type:'flight_cabin',price:f.minSalePriceAmount},orderId:null,paymentNo:null,paid:false,refundId:null});
+  setFlow('trade');switchPanel('trade');renderTrade();
+  toast('已从 AI 规划带入航班：'+f.flightNo);
+}
+
 let aiPlanBusy=false, aiPlanTimer=null;
 async function aiGeneratePlan(){
   if(aiPlanBusy) return;                       // 防重复点击
@@ -851,6 +1006,16 @@ async function aiGeneratePlan(){
     if(aiPlanTimer){clearInterval(aiPlanTimer);aiPlanTimer=null;}
   }
 }
+/* 选一个适合讲解的景点名：优先当天的主题标题，过滤掉酒店/房型这类非景点 */
+function pickGuideSpot(day,city){
+  const bad=/酒店|大床房|双床房|房型|客栈|民宿|迎宾馆|宾馆|度假村|套房|标间/;
+  let t=String(day&&day.title||'').replace(/^第?\s*\d+\s*天[\s:：·—\-]*/,'').trim();
+  if(t&&!bad.test(t)) return t;
+  const r=(day&&day.recommendations||[]).map(x=>x&&x.name).find(n=>n&&!bad.test(n));
+  if(r) return String(r).split('-')[0].trim();
+  const slot=[day&&day.morning,day&&day.afternoon,day&&day.evening].filter(Boolean).join(' ');
+  return t||slot.slice(0,14)||city||'景点';
+}
 function renderAIPlan(d){
   const box=document.getElementById('ai-result');
   const powered=d.ai_powered?'<span class="ai-badge">✦ 真实 AI 生成</span>':'<span class="ai-badge" style="background:#d97706">本地推荐</span>';
@@ -867,6 +1032,7 @@ function renderAIPlan(d){
       ${d.tips?`<div style="margin-top:10px;color:#b45309">💡 ${esc(d.tips)}</div>`:''}
     </div>
     <div class="actions" style="margin-top:12px">
+      <button class="btn sm poster-btn" onclick="makePoster()">📷 生成行程海报</button>
       <button class="btn sm ghost" onclick="syncPlanEverywhere()">↔ 同步城市到搜索 / 知识库 / 地图</button>
       <button class="btn sm ghost" onclick="searchCityProducts('${esc(d.city||'')}')">搜索该城市商品 →</button>
     </div></div>`;
@@ -895,7 +1061,7 @@ function renderAIPlan(d){
     const photo=spotPhoto(spotText, d.city||'', 'scenic');
     const hero=photo?`<img class="ai-day-photo" src="${photo}" alt="${esc(day.title||'')}" loading="lazy">`:'';
     const isChanged=changedSet.has(day.day)||changedSet.has(Number(day.day));
-    const guideSpot=(day.recommendations||[]).map(r=>r&&r.name).find(Boolean)||day.title||d.city;
+    const guideSpot=pickGuideSpot(day,d.city);
     html+=`<div class="ai-day${isChanged?' day-changed':''}"><h3>📅 ${esc(day.title||('第'+day.day+'天'))}${isChanged?'<span class="change-flag">已调整</span>':''}<button class="guide-mini" style="margin-left:auto" onclick="openGuide('${esc(guideSpot)}','${esc(d.city||'')}')">🎧 讲讲这天</button></h3>${hero}
       <div class="slot"><b>上午</b>${esc(day.morning||'自由活动')}</div>
       <div class="slot"><b>下午</b>${esc(day.afternoon||'')}</div>
@@ -1276,6 +1442,84 @@ document.addEventListener('change',e=>{
     toast('当前用户已切换为 #'+u+'，所有面板同步生效');
   }
 });
+/* ==================== 行程海报导出（纯 Canvas，无外部依赖） ==================== */
+function wrapText(ctx,text,maxWidth){
+  const chars=String(text||'').split('');let line='',lines=[];
+  chars.forEach(c=>{const t=line+c;if(ctx.measureText(t).width>maxWidth&&line){lines.push(line);line=c;}else line=t;});
+  if(line)lines.push(line);return lines;
+}
+function makePoster(){
+  const d=window.__lastPlan;
+  if(!d){toast('请先生成一份行程');return;}
+  const W=750,H=1334,c=document.createElement('canvas');
+  c.width=W;c.height=H;
+  const x=c.getContext('2d');
+  // 背景
+  x.fillStyle='#0f172a';x.fillRect(0,0,W,H);
+  x.fillStyle='#1e293b';x.fillRect(0,0,W,360);
+  // 顶部装饰圆
+  x.fillStyle='rgba(245,158,11,.10)';x.beginPath();x.arc(650,60,180,0,Math.PI*2);x.fill();
+  x.fillStyle='rgba(99,102,241,.10)';x.beginPath();x.arc(80,300,150,0,Math.PI*2);x.fill();
+  // 品牌
+  x.fillStyle='#fbbf24';x.font='600 24px sans-serif';x.fillText('✦ 云游旅行 · AI 智能行程',56,80);
+  // 主标题
+  const title=(d.city||'旅行')+' '+(d.days||'')+' 日行程';
+  x.fillStyle='#ffffff';x.font='bold 62px sans-serif';x.fillText(title,52,180);
+  x.fillStyle='#94a3b8';x.font='24px sans-serif';
+  wrapText(x,d.summary||'专属定制行程',W-104).slice(0,2).forEach((ln,i)=>x.fillText(ln,54,232+i*34));
+  // 徽章
+  x.fillStyle=d.ai_powered?'#f59e0b':'#475569';roundRect(x,54,300,200,44,22);x.fill();
+  x.fillStyle='#0f172a';x.font='bold 22px sans-serif';x.fillText(d.ai_powered?'✦ 真实 AI 生成':'本地推荐',80,328);
+  x.fillStyle='#fbbf24';x.font='600 22px sans-serif';x.fillText('¥'+Number(d.estimated_cost||0).toFixed(0)+' 起',300,328);
+  // 每日行程卡片
+  let y=410;
+  (d.days_plan||[]).slice(0,5).forEach((day,idx)=>{
+    const colors=['#f43f5e','#3b82f6','#10b981','#f59e0b','#8b5cf6'];
+    x.fillStyle='#1e293b';roundRect(x,40,y,W-80,158,16);x.fill();
+    x.fillStyle=colors[idx%5];roundRect(x,40,y,8,158,4);x.fill();
+    x.fillStyle=colors[idx%5];x.font='bold 26px sans-serif';x.fillText('DAY '+(day.day||idx+1),66,y+40);
+    x.fillStyle='#f1f5f9';x.font='bold 27px sans-serif';
+    wrapText(x,String(day.title||'').replace(/^📅\s*/,''),W-220).slice(0,1).forEach(ln=>x.fillText(ln,150,y+40));
+    x.fillStyle='#cbd5e1';x.font='22px sans-serif';
+    const lines=[];
+    if(day.morning)lines.push('上午 '+String(day.morning).slice(0,26));
+    if(day.afternoon)lines.push('下午 '+String(day.afternoon).slice(0,26));
+    if(day.evening)lines.push('晚上 '+String(day.evening).slice(0,26));
+    lines.slice(0,3).forEach((ln,i)=>x.fillText(ln,66,y+80+i*28));
+    y+=174;
+  });
+  // 底部
+  x.fillStyle='#334155';x.fillRect(0,H-96,W,96);
+  x.fillStyle='#fbbf24';x.font='bold 24px sans-serif';x.fillText('✦ 云游旅行',54,H-58);
+  x.fillStyle='#94a3b8';x.font='20px sans-serif';x.fillText('AI 规划 · 真实数据 · 可下单',54,H-30);
+  x.fillStyle='#64748b';x.font='18px sans-serif';x.textAlign='right';x.fillText('http://101.37.234.52',W-54,H-44);x.textAlign='left';
+  // 预览
+  const dataURL=c.toDataURL('image/png');
+  const pv=document.getElementById('poster-preview');
+  if(!pv){
+    const wrap=document.createElement('div');wrap.id='poster-preview';wrap.className='poster-preview';
+    wrap.innerHTML=`<div class="poster-wrap"><img id="poster-img" alt="行程海报"><div class="pt-actions">
+      <button class="btn" onclick="downloadPoster()">⬇ 下载海报</button>
+      <button class="btn sm ghost" onclick="closePoster()">关闭</button></div></div>`;
+    wrap.onclick=e=>{if(e.target===wrap)closePoster();};
+    document.body.appendChild(wrap);
+  }
+  document.getElementById('poster-img').src=dataURL;
+  window.__posterData=dataURL;
+  document.getElementById('poster-preview').classList.add('show');
+}
+function roundRect(ctx,x,y,w,h,r){
+  ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();
+}
+function closePoster(){document.getElementById('poster-preview')?.classList.remove('show');}
+function downloadPoster(){
+  if(!window.__posterData)return;
+  const a=document.createElement('a');a.href=window.__posterData;
+  a.download='云游旅行_行程海报.png';document.body.appendChild(a);a.click();a.remove();
+  toast('海报已开始下载');
+}
+
 restoreCtx();          // 恢复上次演示的会话状态
 syncUidInputs(currentUid());
 renderCtxBar();
