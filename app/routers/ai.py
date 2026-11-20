@@ -183,6 +183,41 @@ def _fallback_plan(req: PlanRequest, products: dict[str, list[dict[str, Any]]]) 
     }
 
 
+def _force_day_count(data: dict[str, Any], req: PlanRequest,
+                     products: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    """兜底校正：无论 AI 返回几天，都强制 days_plan 恰好为 req.days 天。"""
+    plan = data.get("days_plan") or []
+    if not isinstance(plan, list):
+        plan = []
+    target = req.days
+    # 天数不足：用真实商品按天轮换补足，避免空白天
+    if len(plan) < target:
+        scenics = products.get("scenics") or []
+        hotels = products.get("hotels") or []
+        for d in range(len(plan) + 1, target + 1):
+            spot = scenics[(d - 1) % len(scenics)] if scenics else None
+            hotel = hotels[0] if hotels else None
+            recs = ([spot] if spot else []) + ([hotel] if hotel and d == 1 else [])
+            plan.append({
+                "day": d,
+                "title": f"第{d}天 · {'深度探索' if not spot else str(spot.get('name', '').split('-')[0])}",
+                "morning": "酒店早餐后出发，开启当天旅程",
+                "afternoon": f"游览 {spot['name']}" if spot else "城市深度漫步与自由探索",
+                "evening": "品尝当地特色美食，感受夜色",
+                "recommendations": recs,
+            })
+    # 天数超出：截断
+    elif len(plan) > target:
+        plan = plan[:target]
+    # 重新编号，保证 day 字段连续 1..N
+    for i, day in enumerate(plan, 1):
+        if isinstance(day, dict):
+            day["day"] = i
+    data["days_plan"] = plan
+    data["days"] = target
+    return data
+
+
 SYSTEM_PROMPT = """你是一位专业旅游规划师。基于我提供的真实商品数据，为用户生成一份结构与内容都合理的旅行行程。
 严格输出 JSON（不要 markdown 代码块），格式如下：
 {
@@ -202,7 +237,11 @@ SYSTEM_PROMPT = """你是一位专业旅游规划师。基于我提供的真实�
 3. 每天的具体安排、游览顺序、体验亮点、注意事项，要充分吸收【旅游攻略知识】，让行程有理有据、有画面感。
 4. references 填写你实际参考过的攻略出处（就是【】里"出处:"后的文件名），没有则空数组。
 5. 控制总费用尽量不超过预算，结合用户偏好。
-6. 只输出纯 JSON。"""
+6. 只输出纯 JSON。
+7. 【最重要·硬性】days_plan 必须【恰好】包含用户指定的天数 N 个对象（我会在输入中写明"行程 N 天"），
+   day 编号从 1 连续排到 N，一天都不能少、也不能多。绝不允许只输出 3 天而用户要求更多天。
+   即使景点素材不足，也要把每一天都排满（可安排周边小镇、深度体验、自由活动、美食探索等），
+   必须保证 days_plan 数组长度 == N。"""
 
 
 async def _call_qwen(messages: list[dict[str, str]], max_tokens: int = 1200, json_mode: bool = True) -> str:
@@ -268,11 +307,41 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
                 refs.append(label)
         data["references"] = refs
         data["kb_sources"] = kb_sources
+        # 硬性校正：保证返回的天数严格等于用户请求天数
+        data = _force_day_count(data, req, products)
         return data
     except Exception as exc:  # 超时 / 解析失败 / 额度问题 → 降级
         fb = _fallback_plan(req, products)
         fb["notice"] = f"AI 服务暂时不可用，已切换本地推荐（{type(exc).__name__}）"
         return fb
+
+
+def _align_days_to(data: dict[str, Any], ref_plan: dict[str, Any]) -> dict[str, Any]:
+    """微调后对齐天数：以原行程天数为准，缺天从原行程补回，多余截断。"""
+    target = int(ref_plan.get("days") or len(ref_plan.get("days_plan") or []) or 3)
+    plan = data.get("days_plan") or []
+    if not isinstance(plan, list):
+        plan = []
+    ref_days = ref_plan.get("days_plan") or []
+    if len(plan) < target:
+        for d in range(len(plan) + 1, target + 1):
+            src = ref_days[d - 1] if d - 1 < len(ref_days) else None
+            if isinstance(src, dict):
+                restored = json.loads(json.dumps(src))
+                restored["day"] = d
+                plan.append(restored)
+            else:
+                plan.append({"day": d, "title": f"第{d}天", "morning": "自由活动",
+                             "afternoon": "城市漫步", "evening": "品尝当地美食",
+                             "recommendations": []})
+    elif len(plan) > target:
+        plan = plan[:target]
+    for i, day in enumerate(plan, 1):
+        if isinstance(day, dict):
+            day["day"] = i
+    data["days_plan"] = plan
+    data["days"] = target
+    return data
 
 
 @router.post("/chat")
@@ -390,8 +459,8 @@ async def ai_refine(req: RefineRequest) -> dict[str, Any]:
         content = await _call_qwen(messages, max_tokens=1600, json_mode=True)
         data = json.loads(content)
         data = _clean_refs(data, valid)
+        data = _align_days_to(data, plan)
         data["city"] = req.city or plan.get("city", "")
-        data["days"] = plan.get("days", len(data.get("days_plan") or []))
         data["budget"] = plan.get("budget")
         data["ai_powered"] = True
         if not data.get("references"):

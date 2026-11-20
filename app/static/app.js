@@ -832,14 +832,27 @@ const ALL_CITIES = {'三亚':2197,'云南':2574,'厦门':1154,'张家界':1857,'
   '桂林':2154,'丽江':2540,'大理':2522,'青岛':651,'南京':581,'苏州':639,'广州':1910,'昆明':2441};
 
 /* ===== 一句话解析：从自然语言中抽出城市 / 天数 / 预算 / 偏好 ===== */
+/* 中文数字转整数：支持 一~十、十一、十五、二十、两 等 */
+function cnToInt(s){
+  s=String(s||'').trim();
+  if(/^\d+$/.test(s))return +s;
+  const D={零:0,一:1,二:2,两:2,三:3,四:4,五:5,六:6,七:7,八:8,九:9};
+  if(s==='十')return 10;
+  if(s.indexOf('十')>=0){
+    const parts=s.split('十');
+    return (parts[0]?(D[parts[0]]||1):1)*10 + (parts[1]?(D[parts[1]]||0):0);
+  }
+  let n=0;for(const ch of s){if(D[ch]!=null)n=n*10+D[ch];}return n;
+}
 function parseOneSentence(q){
   q=String(q||'');
   let city='', areaId=null;
   for(const [name,id] of Object.entries(ALL_CITIES)){
     if(q.includes(name)){city=name;areaId=id;break;}
   }
-  const dm=q.match(/(\d+)\s*天/)||q.match(/(\d+)\s*日/);
-  const days=dm?Math.min(7,Math.max(1,+dm[1])):3;
+  // 同时支持阿拉伯数字(5天)与中文数字(五天/五日/十五天)
+  const dm=q.match(/(\d+)\s*[天日]/)||q.match(/([一二两三四五六七八九十]+)\s*[天日]/);
+  const days=dm?Math.min(10,Math.max(1,cnToInt(dm[1]))):3;
   const bm=q.match(/(?:预算|花费|价钱|钱)?\s*(\d{3,6})\s*(?:元|块|rmb)?/i);
   const budget=bm?Math.min(99999,+bm[1]):3000;
   let pref='';
