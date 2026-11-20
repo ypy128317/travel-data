@@ -29,13 +29,22 @@ jobs:
           # Runner 以 systemd 服务运行，环境里未必有 HOME，不能依赖 git config --global。
           # 用 -c 直接注入 safe.directory，规避 Git 2.35+ 的 dubious ownership
           # （部署目录属主是 Windows 传入的 UID，系统里没有对应用户）。
+          # Runner 会为 actions/checkout 注入 GIT_CONFIG_* 凭据，公开仓库匿名 fetch 用不到，
+          # 残留的 extraheader 反而可能让 fetch 认证失败，先清掉。
+          for v in $(env | grep '^GIT_CONFIG_' | cut -d= -f1); do unset "$v"; done
           GIT="git -c safe.directory=/opt/travel-data"
           cd /opt/travel-data || { echo "::error::部署目录不存在"; exit 1; }
           # 自举：服务器重装后也能自动重建 git 工作区
           [ -d .git ] || $GIT init -q
           $GIT remote get-url origin >/dev/null 2>&1 || \
             $GIT remote add origin https://github.com/ypy128317/travel-data.git
-          $GIT fetch origin main || { echo "::error::git fetch 失败"; exit 1; }
+          if ! FETCH_OUT=$($GIT fetch origin main 2>&1); then
+            echo "::error::git fetch 失败: $(echo "$FETCH_OUT" | tr '\n' ' ')"
+            echo "::error::git 版本: $(git --version 2>&1)"
+            echo "::error::remote: $($GIT remote -v 2>&1 | head -2 | tr '\n' ' ')"
+            echo "::error::GitHub 连通: $(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 https://github.com 2>&1)"
+            exit 1
+          fi
           # 强制对齐远端版本；不用 git clean，避免误删 .env / kb_data / static
           $GIT reset --hard origin/main || { echo "::error::git reset 失败"; exit 1; }
           $GIT log -1 --oneline
