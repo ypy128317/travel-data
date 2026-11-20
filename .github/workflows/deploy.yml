@@ -1,8 +1,8 @@
 # ============================================================
 # 旅游数据平台 · 云服务器 CI/CD 自动部署工作流
-# 触发：git push 到 main 分支（或 GitHub 页面手动 Run workflow）
-# 执行：服务器上的 self-hosted runner（标签 self-hosted + aliyun）
-# 效果：自动拉代码 → 同步前端 → 重建后端容器 → 线上验证
+# 触发：push 到 main（或 GitHub 页面手动 Run workflow）
+# 执行：服务器 self-hosted runner（标签 self-hosted + aliyun）
+# 流程：拉代码 → 同步前端挂载卷 → 重建后端 → 线上验证
 # ============================================================
 
 name: Deploy travel-data to Aliyun Server
@@ -12,6 +12,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 同一时间只允许一个部署任务，避免并发改同一目录
+concurrency:
+  group: travel-data-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: [self-hosted, aliyun]
@@ -20,25 +25,25 @@ jobs:
       - name: 1. 拉取最新代码
         run: |
           set -e
-          # 目录属主是 Windows 传入的 UID，Git 2.35+ 会判为 dubious ownership，先解除
-          git config --global --add safe.directory /opt/travel-data
-          cd /opt/travel-data
+          export HOME=/root
+          # Runner 以 systemd 服务运行，环境里未必有 HOME，不能依赖 git config --global。
+          # 用 -c 直接注入 safe.directory，规避 Git 2.35+ 的 dubious ownership
+          # （部署目录属主是 Windows 传入的 UID，系统里没有对应用户）。
+          GIT="git -c safe.directory=/opt/travel-data"
+          cd /opt/travel-data || { echo "::error::部署目录不存在"; exit 1; }
           # 自举：服务器重装后也能自动重建 git 工作区
-          if [ ! -d .git ]; then
-            git init -q
-          fi
-          git remote get-url origin >/dev/null 2>&1 || \
-            git remote add origin https://github.com/ypy128317/travel-data.git
-          git fetch origin main
-          # 强制对齐远端版本；不使用 git clean，避免误删 .env / kb_data / static
-          git reset --hard origin/main
-          git branch --set-upstream-to=origin/main main 2>/dev/null || true
-          echo "=== 当前版本 ==="
-          git log -1 --oneline
+          [ -d .git ] || $GIT init -q
+          $GIT remote get-url origin >/dev/null 2>&1 || \
+            $GIT remote add origin https://github.com/ypy128317/travel-data.git
+          $GIT fetch origin main || { echo "::error::git fetch 失败"; exit 1; }
+          # 强制对齐远端版本；不用 git clean，避免误删 .env / kb_data / static
+          $GIT reset --hard origin/main || { echo "::error::git reset 失败"; exit 1; }
+          $GIT log -1 --oneline
           echo "=== 运行时关键文件保护检查 ==="
-          test -f .env     || { echo "ERROR: .env 丢失，停止部署"; exit 1; }
-          test -d kb_data  || { echo "ERROR: kb_data 丢失，停止部署"; exit 1; }
-          test -d static   || { echo "ERROR: static 挂载卷丢失，停止部署"; exit 1; }
+          test -f .env     || { echo "::error::.env 丢失，停止部署"; exit 1; }
+          test -d kb_data  || { echo "::error::kb_data 丢失，停止部署"; exit 1; }
+          test -d static   || { echo "::error::static 挂载卷丢失，停止部署"; exit 1; }
+          $GIT branch --set-upstream-to=origin/main main 2>/dev/null || true
 
       - name: 2. 同步前端到静态挂载卷
         run: |
