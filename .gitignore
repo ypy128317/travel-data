@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv/
+.idea/
+
+# ===== 密钥与本地环境（绝不入库）=====
+.env
+.env.*
+!.env.example
+
+# ===== 大文件 / 临时产物 =====
+cloudflared.exe
+*.tar.gz
+*.log
+t.log
+test_tunnel.log
+*.tmp
+
+# ===== 服务器运行时目录（由 CI/CD 维护，不纳入版本控制）=====
+# /opt/travel-data/static 是 Docker 挂载卷，前端由 deploy.yml 同步覆盖
+static/

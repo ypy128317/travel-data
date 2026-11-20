@@ -1,0 +1,30 @@
+# ============ 旅游数据平台 后端镜像（国内网络友好版）============
+# 基于 Python 官方镜像（Docker Hub，走教程配的镜像加速器即可拉取）
+# 依赖用清华 pip 源安装，不依赖 ghcr.io，适合国内虚拟机环境
+FROM python:3.12-slim
+
+WORKDIR /app
+
+ENV PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+
+# 先装依赖，利用 Docker 层缓存
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 拷贝项目源码
+COPY app/ ./app/
+COPY seeds/ ./seeds/
+COPY generate/ ./generate/
+COPY sql/ ./sql/
+COPY kb_data/ ./kb_data/
+COPY init_db.py ./
+
+ENV KB_DATA_DIR=/app/kb_data
+
+EXPOSE 8000
+
+# 监听 0.0.0.0，让局域网/公网能访问
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

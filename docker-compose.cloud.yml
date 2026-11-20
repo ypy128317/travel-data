@@ -1,0 +1,95 @@
+# ============ 旅游数据平台 · 云服务器公网版 ============
+# 与 docker-compose.cn.yml 功能一致，针对云服务器（阿里云/腾讯云）做了两点调整：
+#   1. 对外只开 80 端口，浏览器直接访问 http://公网IP （不用带 :8000）
+#   2. MySQL 3306 不对外暴露，只在 Docker 内网供 backend 访问（更安全）
+#
+# 用法（在云服务器项目目录执行）：
+#   docker compose -f docker-compose.cloud.yml up -d --build
+#   docker compose -f docker-compose.cloud.yml --profile seed run --rm seeder
+#   docker compose -f docker-compose.cloud.yml logs -f backend
+
+services:
+  # ---------- MySQL 数据库（仅内网） ----------
+  mysql:
+    image: mysql:8.0
+    container_name: travel-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD:-root}"
+      MYSQL_DATABASE: "${DB_NAME:-travel}"
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+      - --innodb-buffer-pool-size=128M
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./sql/travel.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      # 只绑服务器本地回环，供 Navicat 走 SSH 隧道连接；公网无法直连 3306
+      - "127.0.0.1:3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p${DB_PASSWORD:-root} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------- 数据初始化（一次性，按需运行） ----------
+  seeder:
+    build:
+      context: .
+      dockerfile: Dockerfile.cn
+    container_name: travel-seeder
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: "${DB_PASSWORD:-root}"
+      DB_NAME: "${DB_NAME:-travel}"
+      APP_PORT: "8000"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
+      TMAP_KEY: "${TMAP_KEY:-}"
+    command: sh -c "python -m generate.main --profile smoke || true"
+    profiles:
+      - seed
+
+  # ---------- FastAPI 后端（API + 页面 + 地图），挂公网 80 ----------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.cn
+    container_name: travel-backend
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: "${DB_PASSWORD:-root}"
+      DB_NAME: travel
+      APP_PORT: "8000"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
+      TMAP_KEY: "${TMAP_KEY:-}"
+      TZ: Asia/Shanghai
+    ports:
+      - "80:8000"
+    volumes:
+      # 知识库目录挂载到宿主机，新增/修改 md 后重启 backend 即生效
+      - ./kb_data:/app/kb_data:ro
+      # 前端静态目录挂载到宿主机，改 index.html / app.js / map_template.html 后刷新浏览器即生效
+      - ./static:/app/app/static:ro
+
+volumes:
+  mysql_data:

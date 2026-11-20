@@ -1,0 +1,83 @@
+# ============ 旅游数据平台 本地/线上通用部署 ============
+# 用法：
+#   1) 确认 .env 里 DASHSCOPE_API_KEY、TMAP_KEY 已填（AI 和地图要用）
+#   2) docker compose up -d --build
+#   3) 浏览器访问 http://<服务器IP>:8000/
+#
+# 关键点：后端监听 0.0.0.0，端口映射 "8000:8000"，别人通过服务器 IP 即可访问。
+
+services:
+  # ---------- MySQL 数据库 ----------
+  mysql:
+    image: mysql:8.0
+    container_name: travel-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DB_PASSWORD:-root}"
+      MYSQL_DATABASE: "${DB_NAME:-travel}"
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 建表脚本：容器首次启动时自动执行（仅建表，不含数据）
+      - ./sql/travel.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p${DB_PASSWORD:-root} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------- 数据初始化（建表后生成种子数据，执行一次） ----------
+  seeder:
+    build: .
+    container_name: travel-seeder
+    restart: "no"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: "${DB_PASSWORD:-root}"
+      DB_NAME: "${DB_NAME:-travel}"
+      APP_PORT: "8000"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
+      TMAP_KEY: "${TMAP_KEY:-}"
+    # profile=smoke 生成小规模数据（演示足够、快）；改成 full 生成全量
+    command: sh -c "python -m generate.main --profile smoke || true"
+    profiles:
+      - seed
+
+  # ---------- FastAPI 后端（同时提供 API + 可视化页面 + 地图） ----------
+  backend:
+    build: .
+    container_name: travel-backend
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: root
+      DB_PASSWORD: "${DB_PASSWORD:-root}"
+      DB_NAME: "${DB_NAME:-travel}"
+      APP_PORT: "8000"
+      DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
+      DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+      MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
+      TMAP_KEY: "${TMAP_KEY:-}"
+    ports:
+      - "8000:8000"
+
+volumes:
+  mysql_data:

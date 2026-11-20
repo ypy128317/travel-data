@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>云游旅行 · 线路地图</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f7fa;color:#1f2937}
+  header{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:16px 24px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+  header h1{margin:0;font-size:19px}
+  header p{margin:6px 0 0;font-size:13px;opacity:.85}
+  .wrap{max-width:1280px;margin:0 auto;padding:18px}
+  .card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .fields{display:flex;gap:14px;flex-wrap:wrap;align-items:flex-end}
+  .field{display:flex;flex-direction:column;gap:6px}
+  .field label{font-size:12px;color:#6b7280}
+  select,input{padding:9px 11px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;background:#fff;color:#1f2937}
+  input#spots{min-width:420px}
+  button{border:0;border-radius:8px;padding:10px 16px;font-size:14px;cursor:pointer;font-weight:600}
+  .btn-main{background:linear-gradient(135deg,#2563eb,#1d4ed8);color:#fff}
+  .btn-main:hover{filter:brightness(1.08)}
+  .btn-ghost{background:#eef2ff;color:#1d4ed8}
+  .tag{display:inline-block;padding:4px 10px;background:#eff6ff;color:#1d4ed8;border:1px solid #dbeafe;border-radius:20px;font-size:12px;margin:3px}
+  .status{color:#b45309;font-size:13px;margin-left:8px}
+  #map{width:100%;height:560px;border-radius:10px;background:#eef2f7}
+  .legend{font-size:12px;color:#6b7280;margin-top:8px}
+  .spots-list{margin-top:10px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #dbeafe;border-top-color:#2563eb;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+<!-- 预览面板 iframe 沙箱禁用了 localStorage/sessionStorage，SDK 读取会抛错；用内存实现兜底 -->
+<script type="text/javascript">
+(function(){
+  function shim(name){
+    try{ void window[name]; return; }catch(e){}
+    var mem={};
+    var s={
+      getItem:function(k){return Object.prototype.hasOwnProperty.call(mem,k)?mem[k]:null;},
+      setItem:function(k,v){mem[k]=String(v);},
+      removeItem:function(k){delete mem[k];},
+      clear:function(){mem={};},
+      key:function(i){var ks=Object.keys(mem);return(i>=0&&i<ks.length)?ks[i]:null;}
+    };
+    Object.defineProperty(s,'length',{get:function(){return Object.keys(mem).length;}});
+    try{Object.defineProperty(window,name,{value:s,configurable:true});}catch(e2){}
+  }
+  shim('localStorage'); shim('sessionStorage');
+})();
+</script>
+<!-- 合规：零 Key 代理模式，密钥由 WorkBuddy 运行时注入，前端不暴露任何 Key -->
+<script type="text/javascript">
+  window._TMapSecurityConfig = {
+    serviceHost: 'http://127.0.0.1:__WB_HTTP_PORT__/_TMapService/_wbt/__WB_TMAP_SECRET__',
+  };
+</script>
+<script src="https://map.qq.com/api/gljs?v=1.exp&libraries=service"></script>
+</head>
+<body>
+<header>
+  <h1>🗺️ 云游旅行 · 线路地图</h1>
+  <p>景点实时地理编码打点 + 驾车/步行路线连线 · 腾讯地图（GCJ-02）· 密钥由运行环境安全注入</p>
+</header>
+<div class="wrap">
+  <div class="card">
+    <div class="fields">
+      <div class="field"><label>城市</label>
+        <select id="city">
+          <option value="三亚">三亚</option><option value="云南">云南</option><option value="厦门">厦门</option>
+          <option value="张家界">张家界</option><option value="成都">成都</option><option value="杭州">杭州</option>
+        </select>
+      </div>
+      <div class="field"><label>线路景点（逗号分隔，按顺序）</label>
+        <input id="spots" value="亚龙湾,蜈支洲岛,天涯海角,南山文化旅游区">
+      </div>
+      <div class="field"><label>交通方式</label>
+        <select id="mode"><option value="drive">驾车</option><option value="walk">步行</option></select>
+      </div>
+      <button class="btn-main" id="draw">🗺️ 绘制线路</button>
+      <button class="btn-ghost" id="preset">加载该城市景点</button>
+      <span class="status" id="status"></span>
+    </div>
+    <div class="legend">提示：景点名按腾讯地图地理编码解析（如“亚龙湾”“故宫博物院”），越具体越准。可手动改成任意景点。</div>
+  </div>
+  <div class="card" style="padding:6px"><div id="map"></div></div>
+  <div class="card" id="info" style="display:none"></div>
+</div>
+<script>
+const PRESETS={
+  '三亚':['亚龙湾','蜈支洲岛','天涯海角','南山文化旅游区','海棠湾','鹿回头','西岛'],
+  '云南':['大理古城','洱海','丽江古城','玉龙雪山','石林','滇池','泸沽湖'],
+  '厦门':['鼓浪屿','中山路步行街','沙坡尾','曾厝垵','环岛路','南普陀寺'],
+  '张家界':['张家界国家森林公园','天门山','武陵源','袁家界','金鞭溪'],
+  '成都':['成都大熊猫繁育研究基地','宽窄巷子','武侯祠','锦里','春熙路','都江堰'],
+  '杭州':['西湖','灵隐寺','龙井村','河坊街','西溪湿地','雷峰塔']
+};
+// 内置景点坐标（GCJ-02，公开旅游景点位置，非个人数据），用于 service REST 不可用时的兜底
+const COORDS={
+  '三亚':{'亚龙湾':[18.2149,109.6393],'蜈支洲岛':[18.3077,109.7592],'天涯海角':[18.2470,109.3510],'南山文化旅游区':[18.3010,109.2010],'海棠湾':[18.3000,109.7200],'鹿回头':[18.2200,109.5100],'西岛':[18.2300,109.3700]},
+  '云南':{'大理古城':[25.6060,100.1550],'洱海':[25.7500,100.1700],'丽江古城':[26.8720,100.2340],'玉龙雪山':[27.1040,100.1760],'石林':[24.8140,103.3300],'滇池':[25.0400,102.7000],'泸沽湖':[27.7000,100.7700]},
+  '厦门':{'鼓浪屿':[24.4470,118.0650],'中山路步行街':[24.4800,118.0890],'沙坡尾':[24.4400,118.0900],'曾厝垵':[24.4300,118.1200],'环岛路':[24.4400,118.1300],'南普陀寺':[24.4400,118.0880]},
+  '张家界':{'张家界国家森林公园':[29.3250,110.4500],'天门山':[29.1300,110.4800],'武陵源':[29.3500,110.5500],'袁家界':[29.3400,110.5000],'金鞭溪':[29.3300,110.4800]},
+  '成都':{'成都大熊猫繁育研究基地':[30.7400,104.1470],'宽窄巷子':[30.6700,104.0550],'武侯祠':[30.6460,104.0490],'锦里':[30.6460,104.0550],'春熙路':[30.6570,104.0820],'都江堰':[31.0000,103.6200]},
+  '杭州':{'西湖':[30.2430,120.1490],'灵隐寺':[30.2400,120.1000],'龙井村':[30.2200,120.1000],'河坊街':[30.2400,120.1700],'西溪湿地':[30.2700,120.0600],'雷峰塔':[30.2310,120.1480]}
+};
+const $=id=>document.getElementById(id);
+let map=null, markerLayer=null, lineLayer=null;
+
+function initMap(){
+  if(map)return true;
+  if(!window.TMap){$('status').textContent='地图组件加载中…';return false;}
+  try{
+    map=new TMap.Map('map',{zoom:11,center:new TMap.LatLng(30.25,120.15)});
+    return true;
+  }catch(e){$('status').textContent='地图初始化失败：'+(e.message||e);return false;}
+}
+
+function parseHash(){
+  const h=(location.hash||'').replace(/^#/,'');
+  if(!h)return;
+  const p=new URLSearchParams(h);
+  const city=p.get('city'), spots=p.get('spots');
+  if(city&&$('city').querySelector('option[value="'+city+'"]'))$('city').value=city;
+  if(spots)$('spots').value=spots;
+  // 自动绘制一次
+  setTimeout(()=>$('draw').click(),600);
+}
+
+async function draw(){
+  if(!initMap())return;
+  const names=$('spots').value.split(/[,，、]/).map(s=>s.trim()).filter(Boolean).slice(0,15);
+  if(!names.length){$('status').textContent='请填写至少一个景点';return}
+  const city=$('city').value, mode=$('mode').value;
+  $('status').innerHTML='<span class="spin"></span> 正在定位 '+names.length+' 个景点…';
+  const geocoder=new TMap.service.Geocoder();
+  const pts=[]; const misses=[]; let builtin=0, geo=0;
+  for(const name of names){
+    // 1) 内置坐标优先（内置景点一定能出图）
+    const c=COORDS[city]&&COORDS[city][name];
+    if(c){pts.push({name,lat:c[0],lng:c[1]});builtin++;continue;}
+    // 2) 自定义景点：尝试实时地理编码
+    try{
+      const r=await geocoder.getLocation({address:city+name});
+      const loc=r.result&&r.result.location;
+      if(loc){pts.push({name,lat:loc.lat,lng:loc.lng});geo++;}
+      else misses.push(name);
+    }catch(e){misses.push(name);}
+  }
+  if(!pts.length){$('status').textContent='未定位到任何景点，试试内置的 6 城市景点或更具体的名称';return}
+  // 清理旧图层
+  if(markerLayer){markerLayer.setMap(null);markerLayer=null;}
+  if(lineLayer){lineLayer.setMap(null);lineLayer=null;}
+  // 打点
+  markerLayer=new TMap.MultiMarker({
+    map:map,
+    styles:{pin:new TMap.MarkerStyle({width:26,height:36,anchor:{x:13,y:36},color:'#e11d48'})},
+    geometries:pts.map((p,i)=>({
+      id:'p'+i, styleId:'pin', position:new TMap.LatLng(p.lat,p.lng),
+      properties:{title:p.name}
+    }))
+  });
+  // 标签
+  markerLayer.on('click',evt=>{
+    const g=evt.geometry; if(g&&g.properties)$('status').textContent='📍 '+g.properties.title;
+  });
+  // 连线：优先实时路径规划，失败则用直线兜底，保证一定有线路
+  const svc = mode==='walk' ? new TMap.service.Walking() : new TMap.service.Driving({policy:'LEAST_TIME'});
+  let legs=[]; let realRoute=0;
+  for(let i=0;i<pts.length-1;i++){
+    let seg=[];
+    try{
+      const r=await svc.getDirection({
+        from:new TMap.LatLng(pts[i].lat,pts[i].lng),
+        to:new TMap.LatLng(pts[i+1].lat,pts[i+1].lng)
+      });
+      const route=r.result&&r.result.routes&&r.result.routes[0];
+      if(route&&route.polyline&&route.polyline.length)seg=route.polyline;
+    }catch(e){}
+    if(seg.length){legs=legs.concat(seg);realRoute++;}
+    else legs.push({lat:pts[i].lat,lng:pts[i].lng},{lat:pts[i+1].lat,lng:pts[i+1].lng});
+  }
+  if(legs.length){
+    lineLayer=new TMap.MultiPolyline({
+      map:map,
+      styles:{road:new TMap.PolylineStyle({color:realRoute?'#2563eb':'#7c3aed',width:realRoute?6:3,borderWidth:1,borderColor:realRoute?'#1e40af':'#5b21b6',lineCap:'round',dashArray:realRoute?undefined:[4,4]})},
+      geometries:[{id:'route',styleId:'road',paths:legs.map(p=>new TMap.LatLng(p.lat,p.lng))}]
+    });
+  }
+  // 视野居中
+  const lats=pts.map(p=>p.lat),lngs=pts.map(p=>p.lng);
+  map.setCenter(new TMap.LatLng((Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,
+                                (Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2));
+  if(pts.length>1)map.setZoom(12);
+  $('status').style.color='#047857';
+  $('status').textContent='已绘制 '+pts.length+' 个景点（内置坐标 '+builtin+(geo?' / 实时定位 '+geo:'')+'）'+
+    (realRoute?' · 实时路线':' · 直线连线（路径服务不可用）')+(misses.length?' · 未找到:'+misses.join('/'):'');
+  const info=$('info');
+  info.style.display='block';
+  info.innerHTML='<h2 style="margin-top:0">📍 本次线路（按顺序）</h2><div class="spots-list">'+
+    pts.map((p,i)=>'<span class="tag">'+(i+1)+'. '+p.name+'</span>').join('')+'</div>'+
+    (misses.length?'<div class="legend">未定位：'+misses.join('、')+'</div>':'');
+}
+
+$('draw').onclick=draw;
+$('preset').onclick=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');$('status').textContent='已加载 '+PRESETS[$('city').value].length+' 个代表景点，点“绘制线路”查看';};
+$('city').onchange=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');};
+window.addEventListener('load',()=>{initMap();parseHash();});
+</script>
+</body>
+</html>

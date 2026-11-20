@@ -1,0 +1,61 @@
+# ============================================================
+# 旅游数据平台 · 云服务器 CI/CD 自动部署工作流
+# 触发：git push 到 main 分支（或 GitHub 页面手动 Run workflow）
+# 执行：服务器上的 self-hosted runner（标签 self-hosted + aliyun）
+# 效果：自动拉代码 → 同步前端 → 重建后端容器 → 线上验证
+# ============================================================
+
+name: Deploy travel-data to Aliyun Server
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, aliyun]
+
+    steps:
+      - name: 1. 拉取最新代码
+        run: |
+          set -e
+          cd /opt/travel-data
+          git fetch origin main
+          # 强制对齐远端版本；不使用 git clean，避免误删 .env / kb_data / static
+          git reset --hard origin/main
+          echo "=== 当前版本 ==="
+          git log -1 --oneline
+          echo "=== 运行时关键文件保护检查 ==="
+          test -f .env     || { echo "ERROR: .env 丢失，停止部署"; exit 1; }
+          test -d kb_data  || { echo "ERROR: kb_data 丢失，停止部署"; exit 1; }
+          test -d static   || { echo "ERROR: static 挂载卷丢失，停止部署"; exit 1; }
+
+      - name: 2. 同步前端到静态挂载卷
+        run: |
+          set -e
+          # static 是 compose 挂载到容器 /app/app/static 的卷，覆盖后刷新浏览器即生效
+          cp -a /opt/travel-data/app/static/. /opt/travel-data/static/
+          echo "=== 静态目录 ==="
+          ls -l /opt/travel-data/static/
+
+      - name: 3. 校验配置并重建后端
+        run: |
+          set -e
+          cd /opt/travel-data
+          docker compose -f docker-compose.cloud.yml config -q
+          # 代码未变化时 Docker 命中缓存，不会重启容器；有变化才重建
+          docker compose -f docker-compose.cloud.yml up -d --build backend
+
+      - name: 4. 线上健康检查
+        run: |
+          set -e
+          sleep 8
+          echo "=== 容器状态 ==="
+          docker ps --format '{{.Names}}  {{.Status}}'
+          echo "=== 接口验证 ==="
+          curl -fsS -o /dev/null -w '首页      HTTP %{http_code}\n' http://127.0.0.1/
+          curl -fsS -o /dev/null -w '前端 JS   HTTP %{http_code}\n' http://127.0.0.1/app.js
+          curl -fsS -o /dev/null -w '地图页    HTTP %{http_code}\n' http://127.0.0.1/map
+          curl -fsS -o /dev/null -w '城市接口  HTTP %{http_code}\n' http://127.0.0.1/api/meta/cities
+          echo "=== 部署完成：http://101.37.234.52 ==="

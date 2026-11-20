@@ -1,0 +1,25 @@
+id,service_code,service_name,service_type_code,area_id,vehicle_type_code,passenger_capacity,supplier_id,status_code,created_at,updated_at
+1,TRS0001,北京市/市辖区接送服务1,airport_pickup,2,economy,4,167,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+2,TRS0002,北京市/市辖区接送服务2,airport_dropoff,2,comfort,5,168,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+3,TRS0003,上海市/市辖区接送服务3,charter_daily,786,business,6,169,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+4,TRS0004,上海市/市辖区接送服务4,station_transfer,786,van,4,170,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+5,TRS0005,江苏省/南京市接送服务5,airport_pickup,804,economy,5,171,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+6,TRS0006,浙江省/杭州市接送服务6,airport_dropoff,915,comfort,6,172,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+7,TRS0007,福建省/福州市接送服务7,charter_daily,1140,business,4,173,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+8,TRS0008,福建省/厦门市接送服务8,station_transfer,1154,van,5,174,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+9,TRS0009,江西省/南昌市接送服务9,airport_pickup,1223,economy,6,175,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+10,TRS0010,山东省/济南市接送服务10,airport_dropoff,1335,comfort,4,176,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+11,TRS0011,山东省/青岛市接送服务11,charter_daily,1348,business,5,177,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+12,TRS0012,河南省/郑州市接送服务12,station_transfer,1491,van,6,178,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+13,TRS0013,湖北省/武汉市接送服务13,airport_pickup,1668,economy,4,167,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+14,TRS0014,湖南省/长沙市接送服务14,airport_dropoff,1785,comfort,5,168,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+15,TRS0015,广东省/广州市接送服务15,charter_daily,1922,business,6,169,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+16,TRS0016,广东省/广州市接送服务16,station_transfer,1922,van,4,170,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+17,TRS0017,广东省/深圳市接送服务17,airport_pickup,1945,economy,5,171,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+18,TRS0018,广西壮族自治区/南宁市接送服务18,airport_dropoff,2068,comfort,6,172,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+19,TRS0019,广西壮族自治区/桂林市接送服务19,charter_daily,2092,business,4,173,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+20,TRS0020,重庆市/市辖区接送服务20,station_transfer,2238,van,5,174,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+21,TRS0021,四川省/成都市接送服务21,airport_pickup,2278,economy,6,175,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+22,TRS0022,贵州省/贵阳市接送服务22,airport_dropoff,2476,comfort,4,176,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+23,TRS0023,云南省/昆明市接送服务23,charter_daily,2574,business,5,177,active,2024-01-10 10:00:00,2025-03-05 09:00:00
+24,TRS0024,陕西省/西安市接送服务24,station_transfer,2802,van,6,178,active,2024-01-10 10:00:00,2025-03-05 09:00:00
