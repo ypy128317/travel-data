@@ -285,15 +285,26 @@ function upgradeSelect(sel){
 function upgradeAllSelects(){ document.querySelectorAll('select').forEach(upgradeSelect); }
 function syncComboOf(id){const s=document.getElementById(id);if(s&&s._syncCombo)s._syncCombo();}
 
-async function api(path, {method='GET', params={}, body, headers={}}={}){
+async function api(path, {method='GET', params={}, body, headers={}, timeout=20000}={}){
   let url = API + path;
   const q = new URLSearchParams(Object.entries(params).filter(([,v])=>v!=='' && v!=null));
   if (q.toString()) url += '?' + q;
+  // 超时保护：请求挂起（断网/代理卡死/后端无响应）时自动中断，避免页面永久"提交中..."
+  const ctrl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(()=>ctrl.abort(), timeout) : null;
   const opt = {method, headers:{'Content-Type':'application/json',...headers}};
   if (body) opt.body = JSON.stringify(body);
-  const resp = await fetch(url, opt);
-  let data; try{ data = await resp.json(); }catch{ data = {raw:await resp.text()}; }
-  return {ok:resp.ok, status:resp.status, data};
+  if (ctrl) opt.signal = ctrl.signal;
+  try{
+    const resp = await fetch(url, opt);
+    let data; try{ data = await resp.json(); }catch{ data = {raw:await resp.text()}; }
+    return {ok:resp.ok, status:resp.status, data};
+  }catch(e){
+    const aborted = e && (e.name==='AbortError' || /abort/i.test(String(e.message||'')));
+    return {ok:false, status:0, data:{message: aborted ? '请求超时，请检查网络后重试' : '网络异常：'+(e.message||'请求失败')}};
+  }finally{
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /* ==================== 商品搜索 ==================== */
@@ -516,15 +527,24 @@ async function createOrder(){
   }
   const body={orderTypeCode:type,sourceChannelCode:'app',currencyCode:'CNY',items:[item],usePoints:false};
   const box=document.getElementById('t-resp'); box.innerHTML='<div class="loading"><span class="spin"></span>提交中...</div>';
-  const r=await api('/api/v1/orders',{method:'POST',body,headers:{'X-User-Id':u}});
-  tradeResp(box,r);
-  if(r.ok){
-    trade.orderId=r.data.orderId;trade.orderNo=r.data.orderNo;trade.amount=r.data.payableAmount;trade.user=u;
-    const it=trade.preset&&trade.preset.item;
-    setCtx({userId:u,orderId:trade.orderId,amount:trade.amount,paymentNo:null,paid:false,refundId:null,
-      product:it?{name:it.productName,refId:it.productId,type:it.productTypeCode}:CTX.product});
-    toast('订单 #'+trade.orderId+' 已创建，已进入支付环节');
-    setTimeout(()=>{trade.step=2;renderTrade();setFlow('trade');},600);
+  try{
+    const r=await api('/api/v1/orders',{method:'POST',body,headers:{'X-User-Id':u}});
+    tradeResp(box,r);
+    if(!r.ok){
+      const btn=document.getElementById('t-submit'); if(btn){btn.disabled=false;btn.textContent='重新下单 →';}
+      return;
+    }
+    if(r.ok){
+      trade.orderId=r.data.orderId;trade.orderNo=r.data.orderNo;trade.amount=r.data.payableAmount;trade.user=u;
+      const it=trade.preset&&trade.preset.item;
+      setCtx({userId:u,orderId:trade.orderId,amount:trade.amount,paymentNo:null,paid:false,refundId:null,
+        product:it?{name:it.productName,refId:it.productId,type:it.productTypeCode}:CTX.product});
+      toast('订单 #'+trade.orderId+' 已创建，已进入支付环节');
+      setTimeout(()=>{trade.step=2;renderTrade();setFlow('trade');},600);
+    }
+  }catch(e){
+    if(box)box.innerHTML='<div class="note" style="color:#c0392b">下单失败：'+esc(String(e&&e.message||e))+'，请重试。</div>';
+    const btn=document.getElementById('t-submit'); if(btn){btn.disabled=false;btn.textContent='重新下单 →';}
   }
 }
 const REQUIRES_TRAVELER=new Set(['flight_cabin','train_seat','bus_seat']);
@@ -990,13 +1010,24 @@ function insertAgentFlights(flights,city){
 }
 async function agentBuyFlight(depId){
   const f=(window.__agentFlights||[]).find(x=>x.departureId===depId);if(!f)return;
-  const cfg=TYPES.flight;
-  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,
-    preset:{ok:true,orderTypeCode:'flight_cabin',
-      item:{productTypeCode:'flight_cabin',productId:depId,productName:f.flightNo+' 航班',quantity:1,travelTime:(f.departureDate||daysFromNow(6))+' '+(f.departureTime||'09:00:00')},
-      needsTraveler:true}};
-  setCtx({product:{name:f.flightNo+' 航班',refId:depId,type:'flight_cabin',price:f.minSalePriceAmount},orderId:null,paymentNo:null,paid:false,refundId:null});
+  // 关键修复：departureId 是"班次ID"，不是可下单的"舱位库存ID"。
+  // 必须走 order-suggest 让后端把班次ID转换成正确的舱位商品ID + 出行人，
+  // 否则直接拿 depId 当 productId 会买错舱位（价格对不上）甚至报错。
+  let sug=null;
+  try{
+    sug=await api('/api/meta/order-suggest',{method:'POST',body:{
+      type:'flight',refId:depId,date:f.departureDate||daysFromNow(6),userId:+currentUid()
+    }});
+  }catch(e){}
+  if(!sug||!sug.ok||!sug.data?.ok){
+    toast('这班航班当前无可售舱位，换一班试试');
+    return;
+  }
+  const picked=sug.data.item||{};
+  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,preset:sug.data};
+  setCtx({product:{name:picked.productName||f.flightNo+' 航班',refId:picked.productId||depId,type:'flight_cabin',price:f.minSalePriceAmount},orderId:null,paymentNo:null,paid:false,refundId:null});
   setFlow('trade');switchPanel('trade');renderTrade();
+  document.getElementById('t-resp').innerHTML=`<div class="note" style="color:#1a7f37">已从 AI 规划带入：<b>${esc(picked.productName||f.flightNo+' 航班')}</b>。已自动匹配可售舱位和出行人，点击下单即可。</div>`;
   toast('已从 AI 规划带入航班：'+f.flightNo);
 }
 
