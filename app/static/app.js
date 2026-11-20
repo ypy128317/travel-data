@@ -500,13 +500,18 @@ async function createOrder(){
   } else {
     item={productTypeCode:type,productId:pid,productName:pname,quantity:1};
     if(type==='hotel_room'){item.checkInDate=d1;item.checkOutDate=d2;}
-    else {
-      item.travelTime=d1+' 10:00:00';
-      if(REQUIRES_TRAVELER.has(type)){
-        const tr=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:1},headers:{'X-User-Id':u}});
-        const tid=tr.data?.list?.[0]?.travelerId;
-        if(tid)item.travelerIds=[tid];
-      }
+    else { item.travelTime=d1+' 10:00:00'; }
+  }
+  // 统一兜底：机票/火车/汽车等需要出行人的商品，无论从哪个入口进入，
+  // 只要缺 travelerIds 就自动查第一个出行人补齐，避免"必须传入 travelerId"报错
+  if(REQUIRES_TRAVELER.has(item.productTypeCode||type)){
+    const hasIds=Array.isArray(item.travelerIds)&&item.travelerIds.length>0;
+    if(!hasIds){
+      const tr=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:20},headers:{'X-User-Id':u}});
+      const list=tr.data?.list||[];
+      const qty=Math.max(1,+item.quantity||1);
+      const ids=list.slice(0,qty).map(t=>t.travelerId).filter(x=>x!=null);
+      if(ids.length)item.travelerIds=ids;
     }
   }
   const body={orderTypeCode:type,sourceChannelCode:'app',currencyCode:'CNY',items:[item],usePoints:false};
