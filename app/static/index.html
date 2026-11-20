@@ -260,6 +260,73 @@
   .guide-foot{padding:14px 18px;border-top:1px solid var(--line);display:flex;gap:8px}
   .guide-foot input{flex:1;padding:10px 12px;border:1px solid var(--line);border-radius:9px;font-size:13px;outline:none}
   .guide-foot input:focus{border-color:#8b5cf6}
+
+  /* ===== 收银台 / 电子凭证 ===== */
+  .checkout{display:grid;grid-template-columns:1.5fr 1fr;gap:18px}
+  @media(max-width:820px){.checkout{grid-template-columns:1fr}}
+  .co-line{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .co-line:last-child{border-bottom:0}
+  .co-line .k{color:var(--muted)}
+  .co-line .v{font-weight:600;color:var(--text)}
+  .co-total{display:flex;justify-content:space-between;align-items:baseline;padding:14px 0 4px;font-size:13px}
+  .co-total b{font-size:27px;color:var(--price,#e11d48);font-weight:800}
+  .pay-methods{display:grid;gap:9px;margin:6px 0 4px}
+  .pay-opt{display:flex;align-items:center;gap:11px;border:1.5px solid var(--line);border-radius:11px;padding:12px 14px;cursor:pointer;transition:.16s;background:#fff}
+  .pay-opt:hover{border-color:#a5b4fc;background:#fafaff}
+  .pay-opt.sel{border-color:var(--primary,#4f46e5);background:#f3f2ff;box-shadow:0 0 0 3px rgba(79,70,229,.09)}
+  .pay-opt .pico{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;font-size:18px;color:#fff;flex:none}
+  .pay-opt .pico.ali{background:#1677ff}.pay-opt .pico.wx{background:#07c160}.pay-opt .pico.union{background:#e6452d}
+  .pay-opt .pname{font-weight:600;font-size:13px}.pay-opt .pdesc{font-size:11px;color:var(--muted);margin-top:2px}
+  .pay-opt .pcheck{margin-left:auto;width:19px;height:19px;border-radius:50%;border:2px solid #cbd5e1;display:grid;place-items:center;color:#fff;font-size:11px;flex:none}
+  .pay-opt.sel .pcheck{background:var(--primary,#4f46e5);border-color:var(--primary,#4f46e5)}
+  .pay-progress{text-align:center;padding:26px 16px}
+  .pay-progress .spin{width:46px;height:46px;border-width:4px;margin:0 auto 18px}
+  .pay-progress h3{font-size:17px;margin-bottom:6px}
+  .pay-progress p{color:var(--muted);font-size:13px}
+  .ticket{max-width:440px;margin:0 auto;border:1.5px dashed #c7d2fe;border-radius:16px;overflow:hidden;background:linear-gradient(180deg,#faf9ff,#fff)}
+  .ticket-top{background:linear-gradient(120deg,#4f46e5,#7c3aed);color:#fff;padding:18px 20px;display:flex;align-items:center;gap:12px}
+  .ticket-top .tk-ico{font-size:28px}
+  .ticket-top h3{margin:0;font-size:16px}
+  .ticket-top p{margin:2px 0 0;font-size:11.5px;opacity:.8}
+  .ticket-body{padding:16px 20px}
+  .ticket-foot{border-top:1.5px dashed #c7d2fe;padding:12px 20px;text-align:center;font-size:11px;color:var(--muted)}
+  .barcode{height:34px;margin:12px 0 2px;background:repeating-linear-gradient(90deg,#1f2937 0 2px,transparent 2px 4px,#1f2937 4px 5px,transparent 5px 8px);opacity:.8}
+  .ok-badge{display:inline-flex;align-items:center;gap:6px;background:#dcfce7;color:#15803d;border-radius:999px;padding:5px 12px;font-size:12px;font-weight:600}
+
+  /* ===== 真人导游市场 ===== */
+  .guide-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:16px}
+  .guide-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:15px}
+  .gcard{background:#fff;border:1px solid var(--line);border-radius:15px;padding:0;overflow:hidden;transition:.2s;display:flex;flex-direction:column}
+  .gcard:hover{transform:translateY(-3px);box-shadow:0 16px 34px -16px rgba(30,27,75,.3);border-color:#c7d2fe}
+  .gcard-banner{height:8px;background:linear-gradient(90deg,#f59e0b,#fbbf24)}
+  .gcard.gold .gcard-banner{background:linear-gradient(90deg,#eab308,#fde047)}
+  .gcard.senior .gcard-banner{background:linear-gradient(90deg,#6366f1,#a5b4fc)}
+  .gcard-body{padding:16px 17px;flex:1}
+  .gcard-hd{display:flex;align-items:center;gap:12px;margin-bottom:11px}
+  .gavatar{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:22px;font-weight:700;color:#fff;flex:none;box-shadow:inset 0 0 0 2px rgba(255,255,255,.5)}
+  .gcard-hd h4{margin:0;font-size:15.5px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .glvl{font-size:10px;padding:2px 7px;border-radius:6px;font-weight:600}
+  .glvl.gold{background:#fef9c3;color:#a16207}.glvl.senior{background:#eef2ff;color:#4338ca}.glvl.standard{background:#f1f5f9;color:#475569}
+  .gmeta{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .grating{color:#f59e0b;font-weight:700}
+  .gtags{display:flex;gap:5px;flex-wrap:wrap;margin:9px 0}
+  .gtags span{font-size:10.5px;background:#f5f3ff;color:#6d28d9;border:1px solid #ede9fe;border-radius:6px;padding:2px 8px}
+  .gintro{font-size:11.8px;color:#64748b;line-height:1.65;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px}
+  .gcard-ft{display:flex;align-items:center;justify-content:space-between;padding:12px 17px;border-top:1px solid var(--line);background:#fafbff}
+  .gprice b{font-size:19px;color:var(--price,#e11d48);font-weight:800}
+  .gprice small{font-size:11px;color:var(--muted)}
+  .match-reason{background:#ecfdf5;color:#047857;border-radius:7px;padding:5px 9px;font-size:10.5px;margin-top:8px}
+  .booking-row{border-left:3px solid #6366f1}
+  .status-pill{font-size:10.5px;padding:3px 9px;border-radius:999px;font-weight:600;white-space:nowrap}
+  .status-pill.pending{background:#fef3c7;color:#b45309}.status-pill.confirmed{background:#dbeafe;color:#1d4ed8}
+  .status-pill.completed{background:#dcfce7;color:#15803d}.status-pill.cancelled{background:#f1f5f9;color:#64748b}
+  .modal-mask{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:190;opacity:0;pointer-events:none;transition:.22s;display:grid;place-items:center;padding:20px}
+  .modal-mask.show{opacity:1;pointer-events:auto}
+  .modal{background:#fff;border-radius:18px;width:min(520px,96vw);max-height:90vh;overflow:auto;box-shadow:0 30px 70px -20px rgba(0,0,0,.5);transform:translateY(14px) scale(.98);transition:.24s}
+  .modal-mask.show .modal{transform:none}
+  .modal-hd{padding:20px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  .modal-hd h3{margin:0;font-size:17px}.modal-hd .gx{margin-left:auto;font-size:24px;border:0;background:none;cursor:pointer;color:var(--muted);line-height:1}
+  .modal-body{padding:20px 24px}.modal-foot{padding:16px 24px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
 </style>
 </head>
 <body>
@@ -270,7 +337,8 @@
     <button data-panel="map">线路地图</button>
     <button data-panel="kb">旅游知识库</button>
     <button data-panel="search">商品搜索</button>
-    <button data-panel="trade">交易演示</button>
+    <button data-panel="trade">交易收银台</button>
+    <button data-panel="guides">真人导游</button>
     <button data-panel="member">会员中心</button>
     <button data-panel="refund">售后退款</button>
     <button data-panel="console">接口控制台</button>
@@ -426,6 +494,41 @@
   <div id="trade-body"></div>
 </section>
 
+<!-- ========== 真人导游对接 ========== -->
+<section class="panel" id="panel-guides">
+  <div class="hero" style="--glow:245,158,11">
+    <h1>真人导游对接 <span class="api-tag" style="background:rgba(245,158,11,.2)">AI 智能匹配</span></h1>
+    <p>不止 AI 讲解——把 AI 行程和<strong>真人持证导游</strong>接起来。AI 根据你的城市与偏好智能匹配导游，一键预约、真实落库、状态可追踪。让"规划"直接连到"落地服务"。</p>
+  </div>
+  <div class="card" style="border-color:#fcd34d">
+    <h2>✦ AI 帮我挑导游 <span class="api-tag" style="background:#ede9fe;color:#6d28d9">POST /api/v1/guides/match</span></h2>
+    <p class="desc">把当前 AI 行程的城市与偏好交给智能匹配，按擅长领域、评分、等级综合推荐。</p>
+    <div class="guide-toolbar">
+      <div class="field"><label>服务城市</label><input id="gm-city" placeholder="如：三亚 / 成都"></div>
+      <div class="field"><label>偏好（逗号分隔）</label><input id="gm-pref" placeholder="如：亲子,美食,摄影"></div>
+      <button class="btn" id="btn-gm-match">✦ 智能匹配</button>
+      <button class="btn ghost" id="btn-gm-usectx" onclick="guideUseCtx()">带入当前行程</button>
+    </div>
+    <div id="gm-result"></div>
+  </div>
+  <div class="card">
+    <h2>全部导游 <span class="api-tag">GET /api/v1/guides</span></h2>
+    <div class="guide-toolbar">
+      <div class="field"><label>城市</label><input id="g-city" placeholder="城市名，如 三亚"></div>
+      <div class="field"><label>等级</label>
+        <select id="g-level"><option value="">全部等级</option><option value="gold">金牌</option><option value="senior">高级</option><option value="standard">标准</option></select>
+      </div>
+      <div class="field"><label>关键字</label><input id="g-kw" placeholder="姓名 / 擅长"></div>
+      <button class="btn sm" id="btn-g-search">搜索导游</button>
+    </div>
+    <div class="guide-grid" id="guide-grid"><div class="empty">正在加载导游…</div></div>
+  </div>
+  <div class="card">
+    <h2>我的预约 <span class="api-tag">GET /api/v1/guide-bookings</span> <button class="btn sm ghost" style="margin-left:auto" onclick="loadMyBookings()">刷新</button></h2>
+    <div id="booking-list" class="list" style="margin-top:12px"></div>
+  </div>
+</section>
+
 <!-- ========== 会员中心 ========== -->
 <section class="panel" id="panel-member">
   <div class="hero"><h1>会员中心</h1><p>用户资料、出行人增删改查、会员账户与积分流水，共 6 个接口。</p></div>
@@ -498,8 +601,8 @@
   <div class="card"><h2>系统信息</h2>
     <table><tr><th>项目</th><th>说明</th></tr>
       <tr><td>技术栈</td><td>Python 3.12 · FastAPI · MySQL 8.0 · 通义千问 · 腾讯地图</td></tr>
-      <tr><td>数据表</td><td>43 张（6 层：维度 / 商品 / 供给 / 用户 / 营销 / 交易）</td></tr>
-      <tr><td>API 接口</td><td>39 个（OpenAPI 3.1，含 AI 行程 / 问答 / 知识库检索）</td></tr>
+      <tr><td>数据表</td><td>45 张（6 层：维度 / 商品 / 供给 / 用户 / 营销 / 交易 + 导游对接）</td></tr>
+      <tr><td>API 接口</td><td>47 个（OpenAPI 3.1，含 AI 行程 / 问答 / 知识库检索 / 真人导游匹配与预约）</td></tr>
       <tr><td>知识库</td><td>744 个切片 · 6 城市 · 5 类攻略</td></tr>
       <tr><td>当前数据集</td><td>smoke 演示集（可切换 full 全量）</td></tr>
       <tr><td>部署方式</td><td>Docker Compose · 阿里云 ECS</td></tr>
@@ -524,6 +627,17 @@
     <button class="btn sm" onclick="guideAsk()">提问</button>
   </div>
 </aside>
-<script src="/app.js?v=20261120j"></script>
+<!-- 导游预约弹窗 -->
+<div class="modal-mask" id="booking-mask" onclick="if(event.target===this)closeBookingModal()">
+  <div class="modal">
+    <div class="modal-hd"><span style="font-size:22px">🧭</span><h3>预约真人导游</h3><button class="gx" onclick="closeBookingModal()">×</button></div>
+    <div class="modal-body" id="booking-modal-body"></div>
+    <div class="modal-foot">
+      <button class="btn ghost" onclick="closeBookingModal()">取消</button>
+      <button class="btn" id="btn-booking-submit">确认预约</button>
+    </div>
+  </div>
+</div>
+<script src="/app.js?v=20261120k"></script>
 </body>
 </html>

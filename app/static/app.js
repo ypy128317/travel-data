@@ -132,7 +132,8 @@ const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
    顶栏状态条可点击跳转，关键动作后自动给出下一步入口。 */
 const CTX_KEY='yunyou_ctx_v1';
 const CTX={userId:1, city:'', cityId:null, plan:null, product:null,
-           orderId:null, amount:null, paymentNo:null, payMethod:null, paid:false, refundId:null};
+           orderId:null, amount:null, paymentNo:null, payMethod:null, paid:false, refundId:null,
+           bookingId:null, guideId:null, guideName:null};
 function restoreCtx(){
   try{const s=localStorage.getItem(CTX_KEY);if(s)Object.assign(CTX,JSON.parse(s));}catch(e){}
 }
@@ -163,6 +164,8 @@ function renderCtxBar(){
   if(CTX.product)chips.push(ctxChip('商品',String(CTX.product.name||'').slice(0,16),'trade'));
   if(CTX.orderId)chips.push(ctxChip('订单','#'+CTX.orderId,'trade'));
   if(CTX.paymentNo)chips.push(ctxChip('支付',String(CTX.paymentNo).slice(0,18),'trade'));
+  if(CTX.guideName)chips.push(ctxChip('导游',CTX.guideName,'guides'));
+  if(CTX.bookingId)chips.push(ctxChip('预约','#'+CTX.bookingId,'guides'));
   if(CTX.refundId)chips.push(ctxChip('退款','#'+CTX.refundId,'refund'));
   bar.innerHTML=chips.join('<span class="ctx-sep">›</span>')+'<span class="ctx-hint">点击状态可跳转</span>';
 }
@@ -170,6 +173,7 @@ function gotoCtx(p){
   if(p==='trade'&&CTX.orderId){trade.step=4;setFlow('pay');}
   else if(p==='search')setFlow('search');
   else if(p==='refund')setFlow('refund');
+  else if(p==='guides'){switchPanel('guides');return;}
   else if(p==='ai')setFlow('search');
   switchPanel(p);
 }
@@ -510,7 +514,7 @@ async function createOrder(){
   const r=await api('/api/v1/orders',{method:'POST',body,headers:{'X-User-Id':u}});
   tradeResp(box,r);
   if(r.ok){
-    trade.orderId=r.data.orderId;trade.amount=r.data.payableAmount;trade.user=u;
+    trade.orderId=r.data.orderId;trade.orderNo=r.data.orderNo;trade.amount=r.data.payableAmount;trade.user=u;
     const it=trade.preset&&trade.preset.item;
     setCtx({userId:u,orderId:trade.orderId,amount:trade.amount,paymentNo:null,paid:false,refundId:null,
       product:it?{name:it.productName,refId:it.productId,type:it.productTypeCode}:CTX.product});
@@ -1269,6 +1273,7 @@ function switchPanel(p){
   if(p==='console')renderConsole();
   if(p==='member')loadMember();
   if(p==='refund'){loadRefundableItems();loadRefundList();}
+  if(p==='guides'){loadGuides();loadMyBookings();}
   if(p==='kb')loadKbStats();
   if(p==='map'){
     renderMapCitySpots();
@@ -1278,6 +1283,159 @@ function switchPanel(p){
   }
   window.scrollTo({top:0,behavior:'smooth'});
 }
+/* ==================== 真人导游对接 ==================== */
+let GUIDE_LIST=[];
+const GUIDE_COLORS=['#f59e0b','#6366f1','#0ea5e9','#10b981','#ec4899','#8b5cf6','#ef4444','#14b8a6'];
+function guideAvatar(name,idx){
+  const ch=String(name||'导').slice(0,1);
+  return `<div class="gavatar" style="background:${GUIDE_COLORS[idx%GUIDE_COLORS.length]}">${esc(ch)}</div>`;
+}
+async function loadGuides(){
+  const grid=document.getElementById('guide-grid');if(!grid)return;
+  grid.innerHTML='<div class="empty">正在加载导游…</div>';
+  const params={};
+  const city=document.getElementById('g-city')?.value.trim();
+  const level=document.getElementById('g-level')?.value;
+  const kw=document.getElementById('g-kw')?.value.trim();
+  if(city)params.cityName=city;
+  if(level)params.levelCode=level;
+  if(kw)params.keyword=kw;
+  const r=await api('/api/v1/guides',{params});
+  if(!r.ok){grid.innerHTML=`<div class="empty">加载失败：${esc(JSON.stringify(r.data))}</div>`;return}
+  GUIDE_LIST=r.data.list||[];
+  if(!GUIDE_LIST.length){grid.innerHTML='<div class="empty">没有匹配的导游，换个条件试试</div>';return}
+  grid.innerHTML=GUIDE_LIST.map((g,i)=>`
+    <div class="gcard ${esc(g.levelCode)}">
+      <div class="gcard-banner"></div>
+      <div class="gcard-body">
+        <div class="gcard-hd">
+          ${guideAvatar(g.guideName,i)}
+          <div><h4>${esc(g.guideName)} <span class="glvl ${esc(g.levelCode)}">${esc(g.levelLabel)}</span></h4>
+            <div class="gmeta">${esc(g.cityName)} · ${g.yearsExperience} 年经验 · 带团 ${g.serviceCount} 次</div>
+            <div class="gmeta"><span class="grating">★ ${Number(g.rating).toFixed(2)}</span> · ${g.reviewCount} 条评价</div>
+          </div>
+        </div>
+        <div class="gtags">${(g.tags||[]).map(t=>`<span>${esc(t)}</span>`).join('')}</div>
+        <div class="gintro">${esc(g.intro)}</div>
+        <div class="gmeta" style="margin-top:9px">🗣 ${esc(g.languages)} · 擅长：${esc(g.specialties)}</div>
+      </div>
+      <div class="gcard-ft">
+        <div class="gprice"><b>¥${Number(g.pricePerDay).toFixed(0)}</b><small> /天</small></div>
+        <button class="btn sm" onclick="openBookingModal(${g.guideId})">立即预约 →</button>
+      </div>
+    </div>`).join('');
+}
+function guideUseCtx(){
+  const city=CTX.city||'';
+  const pref=CTX.plan?.preferences||'';
+  document.getElementById('gm-city').value=city;
+  document.getElementById('gm-pref').value=pref;
+  toast(city?`已带入城市「${city}」`:'当前会话暂无城市，请手动输入');
+}
+async function guideMatch(){
+  const city=document.getElementById('gm-city').value.trim();
+  const pref=document.getElementById('gm-pref').value.trim();
+  const box=document.getElementById('gm-result');
+  if(!city){box.innerHTML='<div class="note" style="color:#c0392b">请填写服务城市</div>';return}
+  box.innerHTML='<div class="loading"><span class="spin"></span>AI 正在匹配导游…</div>';
+  const areaId=CITIES.find(c=>c[1]===city||c[1]===city+'市')?.[0]||null;
+  const r=await api('/api/v1/guides/match',{method:'POST',body:{city,preferences:pref,areaId}});
+  if(!r.ok||!r.data.list?.length){box.innerHTML='<div class="empty">暂无匹配结果，试试其它城市</div>';return}
+  box.innerHTML=`<div class="guide-grid" style="margin-top:6px">${r.data.list.map((g,i)=>`
+    <div class="gcard ${esc(g.levelCode)}">
+      <div class="gcard-banner"></div>
+      <div class="gcard-body">
+        <div class="gcard-hd">${guideAvatar(g.guideName,i)}
+          <div><h4>${esc(g.guideName)} <span class="glvl ${esc(g.levelCode)}">${esc(g.levelLabel)}</span></h4>
+            <div class="gmeta"><span class="grating">★ ${Number(g.rating).toFixed(2)}</span> · ${esc(g.cityName)}</div></div>
+        </div>
+        <div class="match-reason">✦ AI 匹配分 ${g.matchScore} · ${(g.matchReasons||[]).join(' / ')}</div>
+        <div class="gtags">${(g.tags||[]).map(t=>`<span>${esc(t)}</span>`).join('')}</div>
+        <div class="gintro">${esc(g.intro)}</div>
+      </div>
+      <div class="gcard-ft"><div class="gprice"><b>¥${Number(g.pricePerDay).toFixed(0)}</b><small> /天</small></div>
+        <button class="btn sm" onclick="openBookingModal(${g.guideId})">预约 TA →</button></div>
+    </div>`).join('')}</div>`;
+  toast('AI 已按偏好为你推荐 '+r.data.list.length+' 位导游');
+}
+let BOOKING_GUIDE=null;
+function openBookingModal(guideId){
+  const g=GUIDE_LIST.find(x=>x.guideId===guideId)||null;
+  BOOKING_GUIDE=g;
+  const planSummary=CTX.plan?(String(CTX.plan.city||'')+' '+CTX.plan.days+'日游 '+(CTX.plan.summary||'')).slice(0,180):'';
+  document.getElementById('booking-modal-body').innerHTML=`
+    <div class="note" style="margin-bottom:14px">${g?`正在预约 <b>${esc(g.guideName)}</b>（${esc(g.levelLabel)} · ¥${Number(g.pricePerDay).toFixed(0)}/天）`:'填写预约信息'}</div>
+    <div class="fields">
+      <div class="field"><label>服务城市</label><input id="bk-city" value="${esc(g?.cityName||CTX.city||'')}"></div>
+      <div class="field"><label>服务日期</label><input id="bk-date" type="date" value="${daysFromNow(6)}"></div>
+      <div class="field"><label>服务天数</label><input id="bk-days" type="number" value="1" min="1" max="15" onchange="calcBookingTotal()"></div>
+      <div class="field"><label>出行人数</label><input id="bk-people" type="number" value="2" min="1" max="30"></div>
+      <div class="field"><label>联系人</label><input id="bk-name" placeholder="您的称呼"></div>
+      <div class="field"><label>联系电话</label><input id="bk-phone" placeholder="方便导游联系"></div>
+    </div>
+    <div class="field" style="margin-top:13px"><label>游玩需求备注</label><input id="bk-remark" placeholder="如：想去小众景点、带老人小孩、需要拍照"></div>
+    ${planSummary?`<div class="match-reason">✦ 将自动带入你的 AI 行程：${esc(planSummary)}</div>`:''}
+    <div class="co-total"><span>预估服务费</span><b id="bk-total">¥${g?Number(g.pricePerDay).toFixed(0):'0'}</b></div>`;
+  document.getElementById('booking-mask').classList.add('show');
+}
+function calcBookingTotal(){
+  if(!BOOKING_GUIDE)return;
+  const days=Math.max(1,+document.getElementById('bk-days').value||1);
+  const el=document.getElementById('bk-total');
+  if(el)el.textContent='¥'+(Number(BOOKING_GUIDE.pricePerDay)*days).toFixed(0);
+}
+function closeBookingModal(){document.getElementById('booking-mask').classList.remove('show');}
+async function submitBooking(){
+  if(!BOOKING_GUIDE){toast('导游信息丢失，请重新选择');return}
+  const body={
+    guideId:BOOKING_GUIDE.guideId,
+    serviceDate:document.getElementById('bk-date').value,
+    days:+document.getElementById('bk-days').value||1,
+    peopleCount:+document.getElementById('bk-people').value||1,
+    contactName:document.getElementById('bk-name').value||null,
+    contactPhone:document.getElementById('bk-phone').value||null,
+    remark:document.getElementById('bk-remark').value||null,
+    planSummary:CTX.plan?(String(CTX.plan.city||'')+' '+CTX.plan.days+'日游 '+(CTX.plan.summary||'')).slice(0,300):null
+  };
+  const btn=document.getElementById('btn-booking-submit');
+  btn.disabled=true;btn.textContent='提交中…';
+  const r=await api('/api/v1/guide-bookings',{method:'POST',body,headers:{'X-User-Id':currentUid()}});
+  btn.disabled=false;btn.textContent='确认预约';
+  if(!r.ok){toast('预约失败：'+(r.data.detail||r.data.message||'未知错误'));return}
+  setCtx({bookingId:r.data.bookingId,guideId:BOOKING_GUIDE.guideId,guideName:BOOKING_GUIDE.guideName});
+  closeBookingModal();
+  toast('预约成功！单号 '+r.data.bookingNo+'，等待导游确认');
+  loadMyBookings();
+}
+async function loadMyBookings(){
+  const box=document.getElementById('booking-list');if(!box)return;
+  const r=await api('/api/v1/guide-bookings',{headers:{'X-User-Id':currentUid()}});
+  if(!r.ok){box.innerHTML=`<div class="empty">加载失败：${esc(JSON.stringify(r.data))}</div>`;return}
+  const list=r.data.list||[];
+  if(!list.length){box.innerHTML='<div class="empty">还没有预约导游，去上面挑一位吧</div>';return}
+  box.innerHTML=list.map(b=>`<div class="item booking-row">
+    <div class="main"><h4>${esc(b.guideName)} <span class="status-pill ${esc(b.statusCode)}">${esc(b.statusLabel)}</span></h4>
+      <div class="sub">${esc(b.bookingNo)} · ${esc(b.cityName)} · ${esc(b.serviceDate)} 起 ${b.days} 天 · ${b.peopleCount} 人</div>
+      ${b.guideReply?`<div class="sub" style="color:#4338ca;margin-top:4px">导游回复：${esc(b.guideReply)}</div>`:''}
+      ${b.planSummary?`<div class="sub" style="color:#16a34a;margin-top:3px">✦ 关联行程：${esc(b.planSummary)}</div>`:''}
+    </div>
+    <div class="side" style="text-align:right">
+      <div class="price">¥${Number(b.totalAmount).toFixed(0)}</div>
+      ${b.statusCode==='pending'?`<button class="btn sm ghost" style="margin-top:6px" onclick="cancelBooking(${b.bookingId})">取消预约</button>`:''}
+    </div>
+  </div>`).join('');
+}
+async function cancelBooking(id){
+  const r=await api(`/api/v1/guide-bookings/${id}/cancel`,{method:'POST',body:{reason:'行程有变'},headers:{'X-User-Id':currentUid()}});
+  if(r.ok){toast('预约已取消');loadMyBookings();if(CTX.bookingId===id)setCtx({bookingId:null,guideName:null});}
+  else toast('取消失败：'+(r.data.detail||'未知错误'));
+}
+/* 导游面板事件绑定 */
+document.getElementById('btn-g-search')?.addEventListener('click',loadGuides);
+document.getElementById('btn-gm-match')?.addEventListener('click',guideMatch);
+document.getElementById('btn-booking-submit')?.addEventListener('click',submitBooking);
+document.getElementById('g-kw')?.addEventListener('keydown',e=>{if(e.key==='Enter')loadGuides();});
+
 /* ==================== 旅游知识库 ==================== */
 async function loadKbStats(){
   const box=document.getElementById('kb-stats'); if(!box)return;
@@ -1529,3 +1687,155 @@ upgradeAllSelects();
 new MutationObserver(()=>upgradeAllSelects()).observe(document.body,{childList:true,subtree:true});
 buildFields();
 loadCities();  // 从后端加载全部城市，完成后自动刷新已渲染的下拉
+
+/* ==================== 收银台式交易体验（覆盖上面的调试版 renderTrade） ====================
+   底层仍调用真实 API（createOrder / startPay / payCallback / getOrder 不变），
+   仅把交互界面从"填 ID 调接口"换成用户视角的：商品确认 → 收银台 → 支付 → 电子凭证。 */
+function renderTrade(){
+  document.querySelectorAll('#steps .step').forEach(s=>{
+    const n=+s.dataset.s;
+    s.classList.toggle('active',n===trade.step);
+    s.classList.toggle('done',n<trade.step);
+  });
+  const b=document.getElementById('trade-body');if(!b)return;
+  const pre=trade.preset, it=pre?pre.item:null;
+  const ptype=it?it.productTypeCode:'hotel_room';
+  const pid=it?it.productId:1, pname=it?it.productName:'演示商品';
+  const d1=it?(it.checkInDate||(it.travelTime||'').slice(0,10)):daysFromNow(6);
+  const d2=it?(it.checkOutDate||daysFromNow(8)):daysFromNow(8);
+  const typeLabel=TYPE_LABEL[ptype]||'商品';
+  // 隐藏字段：保持底层 createOrder 读取的 DOM 契约不变
+  const hidden=`<input type="hidden" id="t-type" value="${esc(ptype)}">
+    <input type="hidden" id="t-pid" value="${pid}">
+    <input type="hidden" id="t-pname" value="${esc(pname)}">
+    <input type="hidden" id="t-date" value="${esc(d1)}">
+    <input type="hidden" id="t-date2" value="${esc(d2)}">
+    <input type="hidden" id="t-uid" value="${currentUid()}">`;
+
+  if(trade.step===1){
+    const photo=spotPhoto(pname,CTX.city||'',ptype==='scenic_ticket'?'scenic':'hotel');
+    const thumb=photo?`<img src="${photo}" alt="" style="width:88px;height:88px;object-fit:cover;border-radius:12px;flex:none">`:'';
+    const reuse=(!pre&&CTX.product)?`<div class="actions" style="margin-top:0"><button class="btn sm ghost" id="t-reuse">↺ 用上次选的商品：${esc(String(CTX.product.name||'').slice(0,22))}</button></div>`:'';
+    const manual=(!pre)?`<details style="margin-top:14px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">手动指定商品参数</summary>
+      <div class="fields" style="margin-top:12px">
+        <div class="field"><label>订单类型</label><select id="t-type-m"><option value="hotel_room">酒店</option><option value="scenic_ticket">景点</option><option value="flight_cabin">机票</option><option value="train_seat">火车</option><option value="transfer_service">接送</option></select></div>
+        <div class="field"><label>商品 ID</label><input id="t-pid-m" value="1" type="number"></div>
+        <div class="field"><label>商品名称</label><input id="t-pname-m" value="演示商品"></div>
+        <div class="field"><label>出行/入住日期</label><input id="t-date-m" type="date" value="${d1}"></div>
+      </div></details>`:'';
+    b.innerHTML=`<div class="card">
+      <h2>① 确认订单 <span class="api-tag">POST /api/v1/orders</span></h2>
+      <p class="desc">核对商品信息，确认后系统将实时校验库存并创建订单。</p>
+      ${reuse}
+      <div class="co-line" style="border:1px solid var(--line);border-radius:12px;padding:14px;gap:14px;display:flex;align-items:center">
+        ${thumb}
+        <div style="flex:1">
+          <div style="font-size:15px;font-weight:700;margin-bottom:4px">${esc(pname)}</div>
+          <div class="sub" style="font-size:12px;color:var(--muted)">${esc(typeLabel)} · ${pre&&CTX.plan?'来自 AI 行程':'来自商品搜索'} · ${esc(d1)}${ptype==='hotel_room'?' 至 '+esc(d2):''}</div>
+          <div style="margin-top:7px"><span class="tag">真实库存校验</span><span class="tag">价格以服务端为准</span></div>
+        </div>
+      </div>
+      <div class="note" style="margin-top:12px">下单后订单号、应付金额会自动写入顶部状态条，供支付、退款、控制台各环节联动使用。</div>
+      ${hidden}${manual}
+      <div class="actions"><button class="btn" id="t-submit">确认下单 →</button></div>
+      <div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=()=>{
+      // 手动模式：把手填值同步回隐藏字段
+      const pm=document.getElementById('t-pid-m');
+      if(pm){document.getElementById('t-type').value=document.getElementById('t-type-m').value;
+        document.getElementById('t-pid').value=pm.value;
+        document.getElementById('t-pname').value=document.getElementById('t-pname-m').value;
+        document.getElementById('t-date').value=document.getElementById('t-date-m').value;
+        trade.preset=null;}
+      createOrder();
+    };
+    if(reuse)document.getElementById('t-reuse').onclick=reuseCtxProduct;
+  } else if(trade.step===2){
+    b.innerHTML=`<div class="card">
+      <h2>② 选择支付方式 <span class="api-tag">POST /api/v1/orders/${trade.orderId}/pay</span></h2>
+      <div class="checkout">
+        <div>
+          <div class="pay-methods">
+            <div class="pay-opt sel" data-pm="alipay" onclick="selectPayMethod('alipay',this)">
+              <div class="pico ali">支</div><div><div class="pname">支付宝</div><div class="pdesc">推荐使用 · 安全快捷</div></div><div class="pcheck">✓</div></div>
+            <div class="pay-opt" data-pm="wechat" onclick="selectPayMethod('wechat',this)">
+              <div class="pico wx">微</div><div><div class="pname">微信支付</div><div class="pdesc">用微信扫码完成付款</div></div><div class="pcheck">✓</div></div>
+            <div class="pay-opt" data-pm="unionpay" onclick="selectPayMethod('unionpay',this)">
+              <div class="pico union">银</div><div><div class="pname">银联在线</div><div class="pdesc">支持各大银行卡</div></div><div class="pcheck">✓</div></div>
+          </div>
+          <input type="hidden" id="t-paymethod" value="alipay">
+          <input type="hidden" id="t-client" value="web">
+          <div class="note" style="margin-top:12px">演示环境不会真实扣款：确认后将生成一个支付单并模拟渠道回调，订单状态与积分会真实落库。</div>
+          <div class="actions"><button class="btn" id="t-submit">确认支付 →</button></div>
+        </div>
+        <div style="background:#fafbff;border:1px solid var(--line);border-radius:13px;padding:18px;height:max-content">
+          <div class="co-line"><span class="k">订单号</span><span class="v">#${trade.orderId}</span></div>
+          <div class="co-line"><span class="k">商品</span><span class="v" style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(pname)}</span></div>
+          <div class="co-total"><span>应付金额</span><b>¥${Number(trade.amount||0).toFixed(2)}</b></div>
+        </div>
+      </div>
+      <div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=startPay;
+  } else if(trade.step===3){
+    b.innerHTML=`<div class="card">
+      <h2>③ 支付处理中 <span class="api-tag">POST /api/v1/payments/callback</span></h2>
+      <div class="pay-progress">
+        <div class="spin"></div>
+        <h3>正在跳转支付平台…</h3>
+        <p>支付单 ${esc(trade.paymentNo)} · 金额 ¥${Number(trade.amount||0).toFixed(2)}</p>
+        <div style="margin-top:22px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button class="btn" id="t-submit">✓ 我已完成付款</button>
+          <button class="btn ghost" onclick="simulatePayFail()">模拟支付失败</button>
+        </div>
+        <input type="hidden" id="t-cbstatus" value="success">
+        <input type="hidden" id="t-cbmethod" value="${esc(trade.payMethod||'alipay')}">
+        <div class="note" style="margin-top:16px">点击"我已完成付款"即模拟支付渠道回调成功（含签名校验），订单将置为已支付并同步积分。</div>
+      </div>
+      <div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=payCallback;
+  } else {
+    const paid=CTX.paid!==false;
+    b.innerHTML=`<div class="card">
+      <h2>④ 支付完成 · 电子凭证 <span class="api-tag">GET /api/v1/orders/${trade.orderId}</span></h2>
+      <div class="ticket">
+        <div class="ticket-top"><div class="tk-ico">🎫</div><div><h3>云游旅行 · 出行凭证</h3><p>${esc(pname)}</p></div></div>
+        <div class="ticket-body">
+          <div style="text-align:center;margin-bottom:12px"><span class="ok-badge">✓ ${paid?'支付成功':'订单已生成'}</span></div>
+          <div class="co-line"><span class="k">订单编号</span><span class="v">${esc(trade.orderNo||('#'+trade.orderId))}</span></div>
+          <div class="co-line"><span class="k">支付单号</span><span class="v" style="font-size:11px">${esc(trade.paymentNo||'-')}</span></div>
+          <div class="co-line"><span class="k">支付方式</span><span class="v">${esc(PAY_LABEL[trade.payMethod]||'支付宝')}</span></div>
+          <div class="co-line"><span class="k">出行日期</span><span class="v">${esc(d1)}</span></div>
+          <div class="co-line"><span class="k">实付金额</span><span class="v" style="color:var(--price,#e11d48);font-size:17px">¥${Number(trade.amount||0).toFixed(2)}</span></div>
+          <div class="barcode"></div>
+          <div style="text-align:center;font-size:10px;color:var(--muted)">${esc(trade.orderNo||trade.orderId)}</div>
+        </div>
+        <div class="ticket-foot">本凭证由云游旅行平台生成 · 可在"售后退款"中申请退订</div>
+      </div>
+      <div class="actions" style="justify-content:center;margin-top:18px">
+        <button class="btn" id="t-goto-guide" style="background:#0d9488">🧭 给这趟行程找个真人导游</button>
+        <button class="btn ghost" id="t-goto-refund">申请退款</button>
+        <button class="btn ghost" id="t-goto-member">看积分变化</button>
+        <button class="btn ghost" id="t-goto-console">接口调试</button>
+        <button class="btn gray" id="t-again">再演示一次</button>
+      </div>
+      <div id="t-resp" style="margin-top:14px"></div></div>`;
+    document.getElementById('t-submit')?.remove();
+    document.getElementById('t-resp').innerHTML=`<div class="note" style="text-align:center;color:#1a7f37">订单、支付单与金额已进入全站状态条，可继续退款、找导游或在控制台调试，无需重新填参数。</div>`;
+    document.getElementById('t-goto-guide').onclick=()=>{switchPanel('guides');loadGuides();loadMyBookings();toast('已带入当前城市，挑一位导游吧');};
+    document.getElementById('t-goto-refund').onclick=gotoRefundWithOrder;
+    document.getElementById('t-goto-member').onclick=()=>{setFlow('pay');switchPanel('member');loadMember();loadPoints();toast('已带入用户 #'+currentUid()+'，积分流水已刷新');};
+    document.getElementById('t-goto-console').onclick=()=>openConsoleFor('/api/v1/orders/{orderId}');
+    document.getElementById('t-again').onclick=()=>{trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,preset:null};setCtx({orderId:null,paymentNo:null,paid:false,refundId:null});renderTrade();};
+  }
+}
+const PAY_LABEL={alipay:'支付宝',wechat:'微信支付',unionpay:'银联在线'};
+function selectPayMethod(code,el){
+  document.getElementById('t-paymethod').value=code;
+  document.querySelectorAll('.pay-opt').forEach(x=>x.classList.remove('sel'));
+  el.classList.add('sel');
+}
+async function simulatePayFail(){
+  const s=document.getElementById('t-cbstatus');if(s)s.value='failed';
+  await payCallback();
+}
+

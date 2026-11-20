@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .config import APP_PORT, TMAP_KEY
 from .database import fetch_all, fetch_one
-from .routers import ai, orders, products, refunds, users
+from .routers import ai, guides, orders, products, refunds, users
 
 app = FastAPI(
     title="旅游平台业务数据 API",
@@ -25,6 +25,7 @@ app.include_router(users.router)
 app.include_router(orders.router)
 app.include_router(refunds.router)
 app.include_router(ai.router)
+app.include_router(guides.router)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -88,6 +89,8 @@ def overview() -> dict[str, dict[str, int]]:
         "orders": "订单",
         "payments": "支付单",
         "refund_requests": "退款申请",
+        "guides": "真人导游",
+        "guide_bookings": "导游预约",
     }
     stats: dict[str, int] = {}
     for table, label in labels.items():

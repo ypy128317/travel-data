@@ -32,6 +32,7 @@ FRONTEND_FILES = [
 # 后端：打进镜像的 Python 源码（改动才需要重建）
 BACKEND_FILES = [
     ("app/routers/ai.py", "app/routers/ai.py"),
+    ("app/routers/guides.py", "app/routers/guides.py"),
     ("app/main.py", "app/main.py"),
     ("app/knowledge.py", "app/knowledge.py"),
     ("app/config.py", "app/config.py"),
