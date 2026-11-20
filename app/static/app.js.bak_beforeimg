@@ -1,0 +1,1095 @@
+const API = '';
+// 全量城市从后端接口加载（数据库 level=2 共 375 个），默认保留几个避免首屏空白
+let CITIES = [[2,'北京市'],[786,'上海市'],[2278,'成都市'],[1945,'深圳市']];
+let CITY_EXTRA = {};  // id -> fullName
+async function loadCities(){
+  try{
+    const r = await api('/api/meta/cities');
+    if(r.ok && r.data.cities && r.data.cities.length){
+      CITIES = r.data.cities.map(c=>[c.id, c.name]);
+      CITY_EXTRA = Object.fromEntries(r.data.cities.map(c=>[c.id, c.fullName||'']));
+      // 已渲染的下拉组件刷新选项
+      document.querySelectorAll('.combo[data-city]').forEach(comboRenderList);
+    }
+  }catch(e){ console.warn('城市列表加载失败，使用默认', e); }
+}
+const uid = () => currentUid();   // 全站统一用户 ID，不再各面板各读一份
+const fmtDate = d => d.toISOString().slice(0,10);
+const daysFromNow = n => { const d=new Date(); d.setDate(d.getDate()+n); return fmtDate(d); };
+const CITYNAME = id => (CITIES.find(c=>c[0]==id)||[,'#'+id])[1];
+
+/* ---- 自定义城市下拉组件（原生 select 在 webview 中弹层会错位） ---- */
+function cityCombo(inputId, sel){
+  const selId = Number(sel||2);
+  const name = CITYNAME(selId);
+  return `<div class="combo" data-city data-input="${inputId}" data-sel="${selId}">
+    <div class="combo-toggle" tabindex="0">${esc(name)}</div>
+    <div class="combo-panel">
+      <input class="combo-search" type="text" placeholder="搜索城市…" autocomplete="off">
+      <div class="combo-list"></div>
+    </div>
+    <input type="hidden" id="${inputId}" value="${selId}">
+  </div>`;
+}
+function comboRenderList(combo){
+  const kw=(combo.querySelector('.combo-search')?.value||'').trim();
+  const sel=Number(combo.dataset.sel);
+  const list=combo.querySelector('.combo-list'); if(!list)return;
+  const matched=CITIES.filter(([id,n])=>!kw||n.includes(kw)||String(id).includes(kw));
+  if(!matched.length){ list.innerHTML='<div class="combo-empty">未找到匹配城市</div>'; return; }
+  list.innerHTML=matched.slice(0,300).map(([id,n])=>
+    `<div class="combo-item ${id==sel?'sel':''}" data-id="${id}"><span>${esc(n)}</span>${CITY_EXTRA[id]?`<small>${esc(CITY_EXTRA[id])}</small>`:''}</div>`
+  ).join('');
+}
+function comboCloseAll(except){
+  document.querySelectorAll('.combo.open').forEach(c=>{ if(c!==except)c.classList.remove('open'); });
+}
+function comboInit(){
+  document.addEventListener('click', e=>{
+    const toggle=e.target.closest('.combo-toggle');
+    if(toggle){
+      if(toggle.closest('[data-select-combo]')) return;   // 原生 select 升级成的 combo 自带逻辑
+      const combo=toggle.closest('.combo'); const willOpen=!combo.classList.contains('open');
+      comboCloseAll(combo);
+      if(willOpen){ comboRenderList(combo); combo.classList.add('open'); const s=combo.querySelector('.combo-search'); if(s){s.value='';setTimeout(()=>s.focus(),0);} }
+      else combo.classList.remove('open');
+      return;
+    }
+    const item=e.target.closest('.combo-item');
+    if(item){
+      const combo=item.closest('.combo');
+      if(combo.dataset.selectCombo) return;               // 同上，避免两套逻辑打架
+      const id=item.dataset.id;
+      combo.dataset.sel=id;
+      combo.querySelector('input[type=hidden]').value=id;
+      combo.querySelector('.combo-toggle').textContent=CITYNAME(Number(id));
+      combo.classList.remove('open');
+      combo.dispatchEvent(new CustomEvent('citychange',{bubbles:true,detail:{id:Number(id),inputId:combo.dataset.input}}));
+      return;
+    }
+    if(!e.target.closest('.combo')) comboCloseAll();
+  });
+  document.addEventListener('input', e=>{
+    if(!e.target.classList.contains('combo-search')) return;
+    const combo=e.target.closest('.combo');
+    if(combo && combo.dataset.selectCombo) return;         // 城市 combo 的搜索才走 CITIES 过滤
+    if(combo) comboRenderList(combo);
+  });
+}
+const esc = s => String(s??'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+/* ==================== 全局会话状态：所有面板共享一份数据 ====================
+   用户 ID / 城市 / 行程 / 商品 / 订单 / 支付单 / 退款单一处设定，处处可见，
+   顶栏状态条可点击跳转，关键动作后自动给出下一步入口。 */
+const CTX_KEY='yunyou_ctx_v1';
+const CTX={userId:1, city:'', cityId:null, plan:null, product:null,
+           orderId:null, amount:null, paymentNo:null, payMethod:null, paid:false, refundId:null};
+function restoreCtx(){
+  try{const s=localStorage.getItem(CTX_KEY);if(s)Object.assign(CTX,JSON.parse(s));}catch(e){}
+}
+function saveCtx(){try{localStorage.setItem(CTX_KEY,JSON.stringify(CTX));}catch(e){}}
+const currentUid=()=>String(CTX.userId||1);
+function toast(msg){
+  let t=document.getElementById('app-toast');
+  if(!t){t=document.createElement('div');t.id='app-toast';t.className='app-toast';document.body.appendChild(t);}
+  t.textContent=msg;t.classList.add('show');
+  clearTimeout(t._timer);t._timer=setTimeout(()=>t.classList.remove('show'),3400);
+}
+function syncUidInputs(u){
+  document.querySelectorAll('input[id$="-uid"]').forEach(el=>{if(String(el.value)!==String(u))el.value=String(u);});
+}
+function setCtx(patch){
+  Object.assign(CTX,patch);
+  saveCtx();renderCtxBar();syncUidInputs(currentUid());
+  if(document.getElementById('panel-console')?.classList.contains('active'))renderConsoleCtx();
+}
+function ctxChip(k,v,goto){
+  return `<span class="ctx-chip set" onclick="gotoCtx('${goto}')"><span class="ctx-k">${k}</span><b>${esc(v)}</b></span>`;
+}
+function renderCtxBar(){
+  const bar=document.getElementById('ctxbar');if(!bar)return;
+  const chips=[ctxChip('用户','#'+currentUid(),'member')];
+  if(CTX.city)chips.push(ctxChip('城市',CTX.city,'search'));
+  if(CTX.plan&&CTX.plan.days)chips.push(ctxChip('行程',CTX.plan.days+' 天','ai'));
+  if(CTX.product)chips.push(ctxChip('商品',String(CTX.product.name||'').slice(0,16),'trade'));
+  if(CTX.orderId)chips.push(ctxChip('订单','#'+CTX.orderId,'trade'));
+  if(CTX.paymentNo)chips.push(ctxChip('支付',String(CTX.paymentNo).slice(0,18),'trade'));
+  if(CTX.refundId)chips.push(ctxChip('退款','#'+CTX.refundId,'refund'));
+  bar.innerHTML=chips.join('<span class="ctx-sep">›</span>')+'<span class="ctx-hint">点击状态可跳转</span>';
+}
+function gotoCtx(p){
+  if(p==='trade'&&CTX.orderId){trade.step=4;setFlow('pay');}
+  else if(p==='search')setFlow('search');
+  else if(p==='refund')setFlow('refund');
+  else if(p==='ai')setFlow('search');
+  switchPanel(p);
+}
+/* 把城市同步到 AI / 知识库 / 商品搜索三处，保持全站上下文一致 */
+function setCityContext(name,id){
+  if(!name)return;
+  const clean=String(name).replace(/[市省]$/,'');
+  const aid=+(id||KB_AREA[clean]||0)||null;
+  setCtx({city:clean,cityId:aid});
+  const ai=document.getElementById('ai-city');
+  if(ai){
+    let v=KB_AREA[clean]?'kb|'+clean:null;
+    if(!v){const hit=CITIES.find(c=>+c[0]===+aid||c[1]===clean||c[1]===clean+'市');if(hit)v=hit[0]+'|'+clean;}
+    if(v){ai.value=v;syncComboOf('ai-city');}
+  }
+  const kb=document.getElementById('kb-city');
+  if(kb&&['三亚','云南','厦门','张家界','成都','杭州'].includes(clean)){kb.value=clean;syncComboOf('kb-city');}
+  if(aid){
+    const cfg=TYPES[currentType]||{};
+    const f=(cfg.fields||[]).find(x=>x.k==='areaId')||(cfg.fields||[]).find(x=>x.k==='arrivalAreaId')||(cfg.fields||[]).find(x=>x.k==='departureAreaId');
+    if(f){
+      const inp=document.getElementById('f_'+f.k);
+      if(inp){
+        inp.value=aid;
+        const combo=inp.closest('.combo');
+        if(combo){combo.dataset.sel=aid;const t=combo.querySelector('.combo-toggle');if(t)t.textContent=CITYNAME(aid)||clean;}
+      }
+    }
+  }
+}
+function applyPlanContext(d){
+  window.__lastPlan=d;
+  const clean=String(d.city||'').replace(/[市省]$/,'');
+  setCityContext(clean,d.areaId||KB_AREA[clean]);
+  setCtx({plan:d,product:null,orderId:null,paymentNo:null,paid:false,refundId:null});
+}
+function syncPlanEverywhere(){
+  const d=window.__lastPlan;if(!d){toast('请先生成一份行程');return;}
+  applyPlanContext(d);
+  toast('已同步：城市「'+CTX.city+'」带入搜索、知识库与地图');
+}
+
+/* ---- 原生 select → 自定义下拉 ----
+   webview 里原生 <select> 的弹层会脱离元素画到页面左上角（就是"下拉条飞了"），
+   所以把所有 select 包成页内渲染的 combo。原 select 保留在 DOM 里（display:none），
+   选中时回写 .value 并派发 change，业务代码读 .value / onchange 全部照旧。 */
+function selectGroups(sel){
+  const groups=[];
+  Array.from(sel.children).forEach(node=>{
+    if(node.tagName==='OPTGROUP'){
+      groups.push({label:node.label||'', items:Array.from(node.children).map(o=>({v:o.value,t:(o.textContent||'').trim(),dis:o.disabled}))});
+    }else if(node.tagName==='OPTION'){
+      if(!groups.length) groups.push({label:'',items:[]});
+      groups[groups.length-1].items.push({v:node.value,t:(node.textContent||'').trim(),dis:node.disabled});
+    }
+  });
+  return groups;
+}
+function upgradeSelect(sel){
+  if(!sel || sel.dataset.upgraded==='1' || sel.closest('.combo')) return;
+  sel.dataset.upgraded='1';
+  const needSearch = sel.options.length>8;
+  const wrap=document.createElement('div');
+  wrap.className='combo';
+  wrap.dataset.selectCombo='1';
+  wrap.innerHTML='<div class="combo-toggle" tabindex="0"></div>'+
+    '<div class="combo-panel">'+(needSearch?'<input class="combo-search" type="text" placeholder="搜索…" autocomplete="off">':'')+
+    '<div class="combo-list"></div></div>';
+  sel.parentNode.insertBefore(wrap,sel);
+  wrap.appendChild(sel);
+  sel.style.display='none';
+  const toggle=wrap.querySelector('.combo-toggle');
+  const search=wrap.querySelector('.combo-search');
+  const list=wrap.querySelector('.combo-list');
+  const syncToggle=()=>{const o=sel.options[sel.selectedIndex];toggle.textContent=o?(o.textContent||'').trim():'';};
+  const render=()=>{
+    const kw=(search?search.value:'').trim();
+    let html='';
+    selectGroups(sel).forEach(g=>{
+      const items=g.items.filter(it=>!kw||it.t.includes(kw)||String(it.v).includes(kw));
+      if(!items.length) return;
+      if(g.label) html+='<div class="combo-group">'+esc(g.label)+'</div>';
+      html+=items.map(it=>'<div class="combo-item'+(it.v===sel.value?' sel':'')+(it.dis?' dis':'')+'" data-val="'+esc(it.v)+'">'+esc(it.t)+'</div>').join('');
+    });
+    list.innerHTML=html||'<div class="combo-empty">无匹配选项</div>';
+  };
+  toggle.onclick=e=>{
+    e.stopPropagation();
+    const willOpen=!wrap.classList.contains('open');
+    comboCloseAll(wrap);
+    if(willOpen){render();wrap.classList.add('open');if(search){search.value='';setTimeout(()=>search.focus(),0);}}
+    else wrap.classList.remove('open');
+  };
+  if(search) search.oninput=render;
+  list.onclick=e=>{
+    const item=e.target.closest('.combo-item');
+    if(!item||item.classList.contains('dis')) return;
+    e.stopPropagation();
+    sel.value=item.dataset.val;
+    syncToggle();
+    wrap.classList.remove('open');
+    sel.dispatchEvent(new Event('change',{bubbles:true}));
+  };
+  syncToggle();
+  sel._syncCombo=syncToggle;   // 供程序化改值时手动同步显示
+  // 浏览器刷新会恢复表单状态，稍后再同步一次显示文字
+  window.addEventListener('pageshow',syncToggle);
+}
+function upgradeAllSelects(){ document.querySelectorAll('select').forEach(upgradeSelect); }
+function syncComboOf(id){const s=document.getElementById(id);if(s&&s._syncCombo)s._syncCombo();}
+
+async function api(path, {method='GET', params={}, body, headers={}}={}){
+  let url = API + path;
+  const q = new URLSearchParams(Object.entries(params).filter(([,v])=>v!=='' && v!=null));
+  if (q.toString()) url += '?' + q;
+  const opt = {method, headers:{'Content-Type':'application/json',...headers}};
+  if (body) opt.body = JSON.stringify(body);
+  const resp = await fetch(url, opt);
+  let data; try{ data = await resp.json(); }catch{ data = {raw:await resp.text()}; }
+  return {ok:resp.ok, status:resp.status, data};
+}
+
+/* ==================== 商品搜索 ==================== */
+const TYPES = {
+  flight:{api:'/api/v1/flights/search', suggestType:'flight',
+    fields:[{k:'departureAreaId',label:'出发城市',type:'city'},{k:'arrivalAreaId',label:'到达城市',type:'city',sel:786},{k:'departureDate',label:'出发日期',type:'date',val:()=>daysFromNow(6)}],
+    render:x=>({refId:x.departureId,title:`${x.flightNo} · ${CITYNAME(x.departureAreaId)} → ${CITYNAME(x.arrivalAreaId)}`,sub:`${x.departureTime} 出发 · ${x.arrivalTime} 到达 · ${x.durationMinutes}分钟`,tags:[x.departureHubName,x.arrivalHubName,...(x.availableCabinClasses||[])],price:x.minSalePriceAmount,cur:x.currencyCode,detail:x})},
+  hotel:{api:'/api/v1/hotels', suggestType:'hotel',
+    fields:[{k:'areaId',label:'城市',type:'city'},{k:'checkInDate',label:'入住日期',type:'date',val:()=>daysFromNow(6)},{k:'checkOutDate',label:'离店日期',type:'date',val:()=>daysFromNow(8)}],
+    render:x=>({refId:x.hotelId,title:x.hotelName,sub:x.address,tags:[x.starRatingCode+'星',x.hotelTypeCode,x.summary,...(x.facilityTags||[])],price:x.minSalePriceAmount,cur:x.currencyCode,detail:x})},
+  scenic:{api:'/api/v1/scenic-spots', suggestType:'scenic',
+    fields:[{k:'areaId',label:'城市',type:'city'},{k:'travelDate',label:'游玩日期',type:'date',val:()=>daysFromNow(6)}],
+    render:x=>({refId:x.scenicSpotId,title:x.scenicName,sub:x.address,tags:[x.ratingCode,x.scenicTypeCode,x.summary,...(x.tagPayload||[])],price:x.minSalePriceAmount,cur:x.currencyCode,detail:x})},
+  train:{api:'/api/v1/trains/search', suggestType:'train',
+    fields:[{k:'departureAreaId',label:'出发城市',type:'city'},{k:'arrivalAreaId',label:'到达城市',type:'city',sel:786},{k:'departureDate',label:'出发日期',type:'date',val:()=>daysFromNow(6)}],
+    render:x=>({refId:x.departureId,title:`${x.trainNo||'车次'} · ${CITYNAME(x.departureAreaId)} → ${CITYNAME(x.arrivalAreaId)}`,sub:`${x.departureTime} 出发 · ${x.arrivalTime} 到达`,tags:[x.departureHubName,x.arrivalHubName,...(x.availableSeatClasses||[])],price:x.minSalePriceAmount,cur:x.currencyCode,detail:x})},
+  bus:{api:'/api/v1/buses/search', suggestType:'bus',
+    fields:[{k:'departureAreaId',label:'出发城市',type:'city'},{k:'arrivalAreaId',label:'到达城市',type:'city',sel:20},{k:'departureDate',label:'出发日期',type:'date',val:()=>daysFromNow(6)}],
+    render:x=>({refId:x.departureId,title:x.routeName||'汽车班线',sub:`${x.departureTime} 出发 · ${x.arrivalTime} 到达`,tags:[x.departureHubName,x.arrivalHubName],price:x.minSalePriceAmount,cur:x.currencyCode,detail:x})},
+  transfer:{api:'/api/v1/transfers', suggestType:'transfer',
+    fields:[{k:'areaId',label:'城市',type:'city'},{k:'businessDate',label:'服务日期',type:'date',val:()=>daysFromNow(6)}],
+    render:x=>({refId:x.serviceId,title:x.serviceName,sub:`${x.serviceCode} · ${x.passengerCapacity}座`,tags:[x.serviceTypeCode,x.vehicleTypeCode],price:null,extra:`可订 ${x.availableInventory} 个`,detail:x})}
+};
+let currentType='flight';
+function buildFields(){
+  const cfg=TYPES[currentType];
+  document.getElementById('api-path').textContent=cfg.api;
+  document.getElementById('fields').innerHTML=cfg.fields.map(f=>{
+    let input;
+    if(f.type==='city') input=cityCombo('f_'+f.k, f.sel||2);
+    else if(f.type==='date') input=`<input id="f_${f.k}" type="date" value="${f.val()}">`;
+    else input=`<input id="f_${f.k}" type="text" value="${f.val?f.val():''}">`;
+    return `<div class="field"><label>${f.label}</label>${input}</div>`;
+  }).join('');
+}
+async function doSearch(){
+  const cfg=TYPES[currentType], params={};
+  cfg.fields.forEach(f=>params[f.k]=document.getElementById('f_'+f.k).value);
+  params.pageNo=1; params.pageSize=20;
+  const box=document.getElementById('result');
+  box.innerHTML='<div class="loading"><span class="spin"></span>查询中...</div>';
+  document.getElementById('detail').innerHTML='';
+  const {ok,data}=await api(cfg.api,{params});
+  if(!ok){box.innerHTML=`<div class="empty">查询失败：${esc(JSON.stringify(data.detail||data))}</div>`;return}
+  const list=data.list||[];
+  document.getElementById('result-count').textContent=`共 ${data.total||0} 条`;
+  if(!list.length){box.innerHTML='<div class="empty">没有找到匹配的数据，换个条件试试</div>';return}
+  window._lastParams=params;
+  box.innerHTML=list.map((x,i)=>{
+    const r=cfg.render(x);
+    const price=r.price!=null?`<div class="price">¥${Number(r.price).toFixed(0)}<small> ${r.cur||''}</small></div>`:`<div class="sub">${r.extra||''}</div>`;
+    return `<div class="item"><div class="main" onclick="showDetail(${i})" style="cursor:pointer"><h4>${esc(r.title)}</h4><div class="sub">${esc(r.sub||'')}</div><div class="tags">${(r.tags||[]).filter(Boolean).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div></div><div class="side">${price}<button class="btn sm" style="margin-top:6px" onclick="buyThis(${i})">去下单 →</button><div class="sub" style="margin-top:3px;font-size:11px;cursor:pointer" onclick="showDetail(${i})">看详情</div></div></div>`;
+  }).join('');
+  window._lastList=list;
+}
+
+/* 从搜索卡片一键下单：解析参数 → 调 suggest → 填入交易演示 */
+async function buyThis(i){
+  const x=window._lastList[i], cfg=TYPES[currentType], p=window._lastParams||{};
+  const dateKey={hotel:'checkInDate',scenic:'travelDate',flight:'departureDate',train:'departureDate',bus:'departureDate',transfer:'businessDate'}[currentType];
+  const payload={
+    type:cfg.suggestType,
+    refId:x.refId!=null?x.refId:x.departureId||x.hotelId||x.scenicSpotId||x.serviceId,
+    date:p[dateKey]||daysFromNow(6),
+    returnDate:p.checkOutDate||null,
+    userId:+currentUid(),
+  };
+  const box=document.getElementById('result');
+  const r=await api('/api/meta/order-suggest',{method:'POST',body:payload});
+  if(!r.ok||!r.data.ok){
+    box.insertAdjacentHTML('beforeend',`<div class="note" style="margin-top:10px;color:#c0392b">无法下单：${esc(r.data.message||JSON.stringify(r.data.detail||r.data))}</div>`);
+    return;
+  }
+  // 填入交易演示第1步，并写入全局会话
+  const picked=r.data.item||{};
+  setCtx({product:{name:picked.productName||x.hotelName||x.scenicName||'所选商品',
+                   refId:picked.productId||x.refId,type:cfg.suggestType,price:picked.salePrice||r.price||null},
+          orderId:null,paymentNo:null,paid:false,refundId:null});
+  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,preset:r.data};
+  setFlow('trade');
+  switchPanel('trade');
+  renderTrade();
+  document.getElementById('t-resp').innerHTML=`<div class="note" style="color:#1a7f37">已从商品搜索带入：<b>${esc(picked.productName||'所选商品')}</b>。下单 → 支付 → 退款的后续数据会自动同步到全站状态条。</div>`;
+  toast('已带入商品：'+(picked.productName||'所选商品'));
+}
+/* 复用全站状态里的上一个商品，不必回搜索页重新挑 */
+function reuseCtxProduct(){
+  const p=CTX.product;if(!p)return;
+  const typeMap={hotel:'hotel_room',scenic:'scenic_ticket',transfer:'transfer_service'};
+  const ptype=typeMap[p.type]||p.type||'hotel_room';
+  const item={productTypeCode:ptype,productId:+p.refId||1,productName:p.name||'所选商品',quantity:1};
+  if(ptype==='hotel_room'){item.checkInDate=daysFromNow(6);item.checkOutDate=daysFromNow(8);}
+  else item.travelTime=daysFromNow(6)+' 09:00:00';
+  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,
+    preset:{ok:true,orderTypeCode:ptype,item,needsTraveler:false}};
+  renderTrade();
+  toast('已复用商品：'+p.name);
+}
+/* 从业务面板直达接口控制台，并预填当前会话参数 */
+function openConsoleFor(path){
+  switchPanel('console');
+  const idx=ENDPOINTS.findIndex(e=>e[2]===path);
+  if(idx>=0)showEndpoint(idx);
+}
+function showDetail(i){
+  const x=window._lastList[i];
+  document.getElementById('detail').innerHTML=`<div class="card" style="margin-top:16px"><h2>完整数据</h2><div class="resp">${esc(JSON.stringify(x,null,2))}</div></div>`;
+  document.getElementById('detail').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+/* ==================== 交易演示 ==================== */
+let trade={step:1,orderId:null,items:[],paymentNo:null,amount:null};
+const PRODUCTS={
+  hotel_room:[['1','北京饭店诺金 · 大床房'],['2','北京饭店诺金 · 套房'],['3','和平饭店 · 大床房']],
+  scenic_ticket:[['1','故宫博物院 · 成人票'],['2','故宫博物院 · 学生票']],
+  flight_cabin:[],train_seat:[],bus_seat:[],transfer_service:[]
+};
+const TYPE_LABEL={hotel_room:'酒店',scenic_ticket:'景点',flight_cabin:'机票',train_seat:'火车',bus_seat:'汽车',transfer_service:'接送'};
+function renderTrade(){
+  document.querySelectorAll('#steps .step').forEach(s=>{
+    const n=+s.dataset.s;
+    s.classList.toggle('active',n===trade.step);
+    s.classList.toggle('done',n<trade.step);
+  });
+  const b=document.getElementById('trade-body');
+  const hdr=(title,api)=>`<div class="card"><h2>${title} <span class="api-tag">${api}</span></h2>`;
+  if(trade.step===1){
+    const opts=Object.entries(TYPE_LABEL).map(([k,v])=>`<option value="${k}">${v}</option>`).join('');
+    const pre=trade.preset;
+    const it=pre?pre.item:null;
+    const ptype=it?it.productTypeCode:'hotel_room';
+    const pid=it?it.productId:1, pname=it?it.productName:'演示商品';
+    const d1=it?(it.checkInDate||(it.travelTime||'').slice(0,10)):daysFromNow(6);
+    const d2=it?(it.checkOutDate||daysFromNow(8)):daysFromNow(8);
+    const reuse=(!pre&&CTX.product)?`<div class="actions" style="margin-top:0"><button class="btn sm ghost" id="t-reuse">↺ 用上次选的商品：${esc(String(CTX.product.name||'').slice(0,22))}</button></div>`:'';
+    b.innerHTML=hdr('第 1 步 · 创建订单','POST /api/v1/orders')+
+      `<div class="note">${pre?'已从'+(CTX.plan?'AI 行程':'商品搜索')+'带入参数，确认后直接下单。':'可到"商品搜索"选商品点"去下单"，或点 AI 行程里的商品标签自动带入，也可以手动填写。'}</div>${reuse}
+       <div class="fields">
+        <div class="field"><label>订单类型</label><select id="t-type">${Object.entries(TYPE_LABEL).map(([k,v])=>`<option value="${k}" ${k===ptype?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="field"><label>商品 ID（productId）</label><input id="t-pid" value="${pid}" type="number"></div>
+        <div class="field"><label>商品名称</label><input id="t-pname" value="${esc(pname)}"></div>
+        <div class="field"><label>入住/出行日期</label><input id="t-date" type="date" value="${d1}"></div>
+        <div class="field"><label>离店日期（酒店）</label><input id="t-date2" type="date" value="${d2}"></div>
+        <div class="field"><label>用户 ID</label><input id="t-uid" value="${currentUid()}" type="number"></div>
+       </div>
+       <div class="actions"><button class="btn" id="t-submit">创建订单</button></div><div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=createOrder;
+    if(!pre&&CTX.product)document.getElementById('t-reuse').onclick=reuseCtxProduct;
+  } else if(trade.step===2){
+    b.innerHTML=hdr('第 2 步 · 发起支付',`POST /api/v1/orders/${trade.orderId}/pay`)+
+      `<div class="note">订单 <b>#${trade.orderId}</b> 已创建，应付 <b>¥${trade.amount}</b>。发起支付后得到一个支付单。</div>
+       <div class="fields">
+        <div class="field"><label>支付方式</label><select id="t-paymethod"><option value="alipay">支付宝</option><option value="wechat">微信支付</option><option value="unionpay">银联</option></select></div>
+        <div class="field"><label>客户端类型</label><select id="t-client"><option value="app">App</option><option value="web">Web</option><option value="miniapp">小程序</option></select></div>
+       </div>
+       <div class="actions"><button class="btn" id="t-submit">发起支付</button></div><div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=startPay;
+  } else if(trade.step===3){
+    b.innerHTML=hdr('第 3 步 · 支付回调','POST /api/v1/payments/callback')+
+      `<div class="note">支付单 <b>${trade.paymentNo}</b>。回调需带签名头 <code>X-Demo-Payment-Signature: mock-payment-signature</code>，页面已自动带上。</div>
+       <div class="fields">
+        <div class="field"><label>回传状态</label><select id="t-cbstatus"><option value="success">支付成功</option><option value="failed">支付失败</option></select></div>
+        <div class="field"><label>支付方式</label><select id="t-cbmethod"><option value="alipay">支付宝</option><option value="wechat">微信支付</option><option value="unionpay">银联</option></select></div>
+       </div>
+       <div class="actions"><button class="btn" id="t-submit">发送回调</button></div><div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=payCallback;
+  } else {
+    b.innerHTML=hdr('第 4 步 · 查看订单详情',`GET /api/v1/orders/${trade.orderId}`)+
+      `<div class="note">交易完成。订单、支付单与金额已进入全站状态条，可以直接跳转到会员积分、售后退款或接口控制台继续演示，无需重新填参数。</div>
+       <div class="actions">
+         <button class="btn" id="t-submit">查询订单详情</button>
+         <button class="btn" id="t-goto-refund" style="background:var(--price)">带此订单去退款 →</button>
+         <button class="btn ghost" id="t-goto-member">看积分变化 →</button>
+         <button class="btn ghost" id="t-goto-console">在控制台调试 →</button>
+         <button class="btn gray" id="t-again">重新开始演示</button>
+       </div>
+       <div id="t-resp"></div></div>`;
+    document.getElementById('t-submit').onclick=getOrder;
+    document.getElementById('t-goto-refund').onclick=gotoRefundWithOrder;
+    document.getElementById('t-goto-member').onclick=()=>{setFlow('pay');switchPanel('member');loadMember();loadPoints();toast('已带入用户 #'+currentUid()+'，积分流水已刷新');};
+    document.getElementById('t-goto-console').onclick=()=>openConsoleFor('/api/v1/orders/{orderId}');
+    document.getElementById('t-again').onclick=()=>{trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,preset:null};setCtx({orderId:null,paymentNo:null,paid:false,refundId:null});renderTrade();};
+  }
+}
+function tradeResp(box,{ok,data}){
+  box.innerHTML=`<div class="result-head"><h3>响应</h3><span class="badge ${ok?'ok':'err'}">${ok?'成功':'失败'}</span></div><div class="resp">${esc(JSON.stringify(data,null,2))}</div>`;
+}
+async function createOrder(){
+  const type=document.getElementById('t-type').value;
+  const pid=+document.getElementById('t-pid').value;
+  const pname=document.getElementById('t-pname').value;
+  const d1=document.getElementById('t-date').value, d2=document.getElementById('t-date2').value;
+  const u=document.getElementById('t-uid').value;
+  let item;
+  if(trade.preset && trade.preset.item && +document.getElementById('t-pid').value===trade.preset.item.productId){
+    // 用 suggest 返回的完整参数（保留 travelTime / travelerIds）
+    item={...trade.preset.item};
+    item.productName=pname;
+  } else {
+    item={productTypeCode:type,productId:pid,productName:pname,quantity:1};
+    if(type==='hotel_room'){item.checkInDate=d1;item.checkOutDate=d2;}
+    else {
+      item.travelTime=d1+' 10:00:00';
+      if(REQUIRES_TRAVELER.has(type)){
+        const tr=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:1},headers:{'X-User-Id':u}});
+        const tid=tr.data?.list?.[0]?.travelerId;
+        if(tid)item.travelerIds=[tid];
+      }
+    }
+  }
+  const body={orderTypeCode:type,sourceChannelCode:'app',currencyCode:'CNY',items:[item],usePoints:false};
+  const box=document.getElementById('t-resp'); box.innerHTML='<div class="loading"><span class="spin"></span>提交中...</div>';
+  const r=await api('/api/v1/orders',{method:'POST',body,headers:{'X-User-Id':u}});
+  tradeResp(box,r);
+  if(r.ok){
+    trade.orderId=r.data.orderId;trade.amount=r.data.payableAmount;trade.user=u;
+    const it=trade.preset&&trade.preset.item;
+    setCtx({userId:u,orderId:trade.orderId,amount:trade.amount,paymentNo:null,paid:false,refundId:null,
+      product:it?{name:it.productName,refId:it.productId,type:it.productTypeCode}:CTX.product});
+    toast('订单 #'+trade.orderId+' 已创建，已进入支付环节');
+    setTimeout(()=>{trade.step=2;renderTrade();setFlow('trade');},600);
+  }
+}
+const REQUIRES_TRAVELER=new Set(['flight_cabin','train_seat','bus_seat']);
+async function startPay(){
+  const method=document.getElementById('t-paymethod').value, client=document.getElementById('t-client').value;
+  const box=document.getElementById('t-resp'); box.innerHTML='<div class="loading"><span class="spin"></span>处理中...</div>';
+  const r=await api(`/api/v1/orders/${trade.orderId}/pay`,{method:'POST',body:{paymentMethodCode:method,clientType:client},headers:{'X-User-Id':trade.user}});
+  tradeResp(box,r);
+  if(r.ok){
+    trade.paymentNo=r.data.paymentNo;trade.amount=r.data.amount;trade.payMethod=method;
+    setCtx({paymentNo:trade.paymentNo,amount:trade.amount,payMethod:method});
+    toast('支付单 '+trade.paymentNo+' 已生成');
+    setTimeout(()=>{trade.step=3;renderTrade();setFlow('pay');},600);
+  }
+}
+async function payCallback(){
+  const status=document.getElementById('t-cbstatus').value, method=document.getElementById('t-cbmethod').value;
+  const body={paymentNo:trade.paymentNo,orderId:trade.orderId,paymentMethodCode:method,amount:trade.amount,statusCode:status,paidAt:status==='success'?'2026-11-19 10:45:00':null};
+  const box=document.getElementById('t-resp'); box.innerHTML='<div class="loading"><span class="spin"></span>处理中...</div>';
+  const r=await api('/api/v1/payments/callback',{method:'POST',body,headers:{'X-Demo-Payment-Signature':'mock-payment-signature'}});
+  tradeResp(box,r);
+  if(r.ok){
+    setCtx({paid:status==='success',refundId:null});
+    toast(status==='success'?'支付成功！订单 #'+trade.orderId+' 可退款，积分已同步':'支付失败，可重新发起');
+    setTimeout(()=>{trade.step=4;renderTrade();setFlow('pay');},600);
+  }
+}
+async function getOrder(){
+  const box=document.getElementById('t-resp'); box.innerHTML='<div class="loading"><span class="spin"></span>查询中...</div>';
+  tradeResp(box,await api(`/api/v1/orders/${trade.orderId}`,{headers:{'X-User-Id':trade.user}}));
+}
+/* 交易完成 → 带订单进入售后退款，自动填好刚支付的明细 */
+async function gotoRefundWithOrder(){
+  const u=trade.user||currentUid();
+  setCtx({userId:u});
+  const r=await api(`/api/v1/orders/${trade.orderId}`,{headers:{'X-User-Id':u}});
+  if(!r.ok){alert('查询订单失败：'+JSON.stringify(r.data));return}
+  switchPanel('refund');
+  document.getElementById('refund-uid').value=u;
+  await loadRefundableItems();
+  // 优先选中刚支付的可退明细
+  const items=r.data.items||[];
+  const paid=items.find(it=>['paid','ticketed','completed'].includes(it.statusCode));
+  if(paid){
+    const opts=[...document.getElementById('refund-picker').options];
+    const idx=opts.findIndex(o=>String(o.value)!==''&&REFUNDABLE_ITEMS[+o.value]?.itemId===paid.orderItemId);
+    if(idx>=0){
+      document.getElementById('refund-picker').selectedIndex=idx;
+      syncComboOf('refund-picker');
+      pickRefundItem();
+    } else {
+      // 该明细可能状态未同步，仍直接带入
+      document.getElementById('refund-order').value=trade.orderId;
+      document.getElementById('refund-item').value=paid.orderItemId;
+      document.getElementById('refund-amount').value=Number(paid.saleAmount||0).toFixed(2);
+    }
+  }
+  document.getElementById('refund-create-resp').innerHTML=`<div class="note" style="color:#1a7f37">已从订单 #${trade.orderId} 带入明细，确认金额后即可发起退款。</div>`;
+}
+
+/* ==================== 会员中心 ==================== */
+async function loadMember(){
+  const u=currentUid();
+  const [me,acc]=await Promise.all([api('/api/v1/me',{headers:{'X-User-Id':u}}),api('/api/v1/me/member-account',{headers:{'X-User-Id':u}})]);
+  const kv=o=>Object.entries(o).map(([k,v])=>`<div style="padding:5px 0;border-bottom:1px solid var(--line)"><span style="color:var(--muted)">${esc(k)}</span> <b style="float:right">${esc(v)}</b></div>`).join('');
+  document.getElementById('me-info').innerHTML=me.ok?kv(me.data):`<span style="color:#dc2626">${esc(JSON.stringify(me.data))}</span>`;
+  document.getElementById('me-account').innerHTML=acc.ok?kv(acc.data):`<span style="color:#dc2626">${esc(JSON.stringify(acc.data))}</span>`;
+  loadTravelers();
+}
+async function loadTravelers(){
+  const u=currentUid();
+  const r=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:20},headers:{'X-User-Id':u}});
+  const box=document.getElementById('trav-list');
+  if(!r.ok){box.innerHTML=`<div class="empty">${esc(JSON.stringify(r.data))}</div>`;return}
+  const list=r.data.list||[];
+  box.innerHTML=list.length?list.map(t=>`<div class="item"><div class="main"><h4>${esc(t.travelerName)} <span class="epi">#${t.travelerId}</span></h4><div class="sub">${esc(t.identityTypeCode)} · ${esc(t.identityNoMasked||'')} · ${esc(t.genderCode)}</div></div><div class="side"><button class="btn sm gray" onclick="editTraveler(${t.travelerId})">编辑</button> <button class="btn sm gray" onclick="delTraveler(${t.travelerId})">删除</button></div></div>`).join(''):'<div class="empty">暂无出行人</div>';
+}
+function travForm(t={}){
+  document.getElementById('trav-form').innerHTML=`<div class="card" style="background:#f9fafb;margin-top:12px;box-shadow:none">
+    <h2>${t.travelerId?'编辑':'新增'}出行人</h2>
+    <div class="fields">
+      <div class="field"><label>姓名</label><input id="tv-name" value="${esc(t.travelerName||'')}"></div>
+      <div class="field"><label>证件类型</label><select id="tv-type"><option value="id_card">身份证</option><option value="passport">护照</option></select></div>
+      <div class="field"><label>证件号码</label><input id="tv-no" value="${esc(t.identityNo||'')}"></div>
+      <div class="field"><label>性别</label><select id="tv-gender"><option value="male">男</option><option value="female">女</option></select></div>
+      <div class="field"><label>出生日期</label><input id="tv-birth" type="date" value="${esc(t.birthDate||'')}"></div>
+      <div class="field"><label>电话</label><input id="tv-phone" value="${esc(t.phone||'')}"></div>
+    </div>
+    <div class="actions"><button class="btn sm" id="tv-save">保存</button><button class="btn sm gray" onclick="document.getElementById('trav-form').innerHTML=''">取消</button></div>
+    <div id="tv-resp"></div></div>`;
+  document.getElementById('tv-type').value=t.identityTypeCode||'id_card';
+  document.getElementById('tv-gender').value=t.genderCode||'male';
+  document.getElementById('tv-save').onclick=()=>saveTraveler(t.travelerId);
+}
+function travBody(){return {
+  travelerName:document.getElementById('tv-name').value,
+  identityTypeCode:document.getElementById('tv-type').value,
+  identityNo:document.getElementById('tv-no').value,
+  genderCode:document.getElementById('tv-gender').value,
+  birthDate:document.getElementById('tv-birth').value||null,
+  phone:document.getElementById('tv-phone').value||null};}
+async function saveTraveler(id){
+  const u=currentUid();
+  const body=travBody(); if(id) body.statusCode='active';
+  const r=await api(id?`/api/v1/me/travelers/${id}`:'/api/v1/me/travelers',{method:id?'PUT':'POST',body,headers:{'X-User-Id':u}});
+  document.getElementById('tv-resp').innerHTML=`<div class="result-head"><h3>响应</h3><span class="badge ${r.ok?'ok':'err'}">${r.ok?'成功':'失败'}</span></div><div class="resp">${esc(JSON.stringify(r.data,null,2))}</div>`;
+  if(r.ok)setTimeout(()=>{document.getElementById('trav-form').innerHTML='';loadTravelers();},600);
+}
+async function editTraveler(id){
+  const u=currentUid();
+  const r=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:50},headers:{'X-User-Id':u}});
+  const t=(r.data.list||[]).find(x=>x.travelerId===id);
+  if(t){travForm(t);document.getElementById('trav-form').scrollIntoView({behavior:'smooth',block:'nearest'});}
+}
+async function delTraveler(id){
+  if(!confirm('确定删除该出行人？'))return;
+  const u=currentUid();
+  const r=await api(`/api/v1/me/travelers/${id}`,{method:'DELETE',headers:{'X-User-Id':u}});
+  loadTravelers();
+}
+async function loadPoints(){
+  const u=currentUid();
+  const r=await api('/api/v1/me/point-ledger',{params:{pageNo:1,pageSize:20},headers:{'X-User-Id':u}});
+  const box=document.getElementById('points-list');
+  if(!r.ok){box.innerHTML=`<div class="empty">${esc(JSON.stringify(r.data))}</div>`;return}
+  box.innerHTML=(r.data.list||[]).map(p=>`<div class="item"><div class="main"><h4>${esc(p.ledgerTypeCode||'积分')} ${p.pointsDelta>0?'+':''}${esc(p.pointsDelta)}</h4><div class="sub">${esc(p.createdAt||'')} · 余额 ${esc(p.balanceAfter||'')}</div></div></div>`).join('')||'<div class="empty">暂无流水</div>';
+}
+
+/* ==================== 售后退款 ==================== */
+let REFUNDABLE_ITEMS=[];
+async function loadRefundableItems(){
+  const u=currentUid();
+  const sel=document.getElementById('refund-picker');
+  sel.innerHTML='<option value="">加载中…</option>';
+  syncComboOf('refund-picker');
+  const r=await api('/api/meta/refundable-items',{params:{userId:u}});
+  REFUNDABLE_ITEMS=(r.ok&&r.data.items)||[];
+  if(!REFUNDABLE_ITEMS.length){
+    sel.innerHTML='<option value="">该用户暂无可退明细</option>';
+    syncComboOf('refund-picker');
+    return;
+  }
+  sel.innerHTML='<option value="">— 请选择一条可退明细 —</option>'+REFUNDABLE_ITEMS.map((x,i)=>
+    `<option value="${i}">订单#${x.orderId} · 明细#${x.itemId} · ${esc(x.productName)} · 可退 ¥${Number(x.remainingAmount).toFixed(2)}</option>`
+  ).join('');
+  syncComboOf('refund-picker');
+}
+function pickRefundItem(){
+  const i=document.getElementById('refund-picker').value;
+  if(i==='')return;
+  const x=REFUNDABLE_ITEMS[+i]; if(!x)return;
+  document.getElementById('refund-order').value=x.orderId;
+  document.getElementById('refund-item').value=x.itemId;
+  document.getElementById('refund-amount').value=Number(x.remainingAmount).toFixed(2);
+}
+async function createRefund(){
+  const u=currentUid();
+  const oid=document.getElementById('refund-order').value, iid=document.getElementById('refund-item').value;
+  const amount=+document.getElementById('refund-amount').value;
+  const respBox=document.getElementById('refund-create-resp');
+  if(!oid||!iid){
+    respBox.innerHTML=`<div class="result-head"><h3>响应</h3><span class="badge err">失败</span></div><div class="resp">请先点"加载可退明细"并选择一条明细，不要手动留空。</div>`;
+    return;
+  }
+  if(!(amount>0)){
+    respBox.innerHTML=`<div class="result-head"><h3>响应</h3><span class="badge err">失败</span></div><div class="resp">退款金额必须大于 0。</div>`;
+    return;
+  }
+  const body={requestedAmount:amount,reason:document.getElementById('refund-reason').value};
+  const r=await api(`/api/v1/orders/${oid}/items/${iid}/refund-requests`,{method:'POST',body,headers:{'X-User-Id':u}});
+  respBox.innerHTML=`<div class="result-head"><h3>响应</h3><span class="badge ${r.ok?'ok':'err'}">${r.ok?'成功':'失败'}</span></div><div class="resp">${esc(JSON.stringify(r.data,null,2))}</div>`;
+  if(r.ok){
+    setCtx({refundId:r.data.refundRequestId||r.data.refundRequestNo||r.data.id||'新'});
+    toast('退款申请已创建，已同步到全站状态条');
+    loadRefundList();loadRefundableItems();document.getElementById('refund-picker').value='';syncComboOf('refund-picker');document.getElementById('refund-order').value='';document.getElementById('refund-item').value='';
+  }
+}
+async function loadRefundList(){
+  const u=currentUid();
+  const r=await api('/api/v1/refund-requests',{params:{pageNo:1,pageSize:20},headers:{'X-User-Id':u}});
+  const box=document.getElementById('refund-list');
+  if(!r.ok){box.innerHTML=`<div class="empty">${esc(JSON.stringify(r.data))}</div>`;return}
+  box.innerHTML=(r.data.list||[]).map(x=>`<div class="item"><div class="main"><h4>${esc(x.refundRequestNo)} · ${esc(x.statusCode)}</h4><div class="sub">订单 #${x.orderId} · 明细 #${x.orderItemId} · ${esc(x.requestedAt)}</div></div><div class="side"><div class="price">¥${Number(x.requestedAmount||0).toFixed(0)}</div></div></div>`).join('')||'<div class="empty">暂无退款申请</div>';
+}
+
+/* ==================== 接口控制台 ==================== */
+const ENDPOINTS = [
+  ['商品', 'GET','/api/v1/hotels','酒店搜索'],['商品','GET','/api/v1/hotels/{hotelId}','酒店详情'],['商品','GET','/api/v1/hotels/{hotelId}/room-types','酒店房型'],
+  ['商品','GET','/api/v1/scenic-spots','景点搜索'],['商品','GET','/api/v1/scenic-spots/{scenicSpotId}','景点详情'],['商品','GET','/api/v1/scenic-spots/{scenicSpotId}/ticket-types','景点票种'],
+  ['商品','GET','/api/v1/flights/search','机票搜索'],['商品','GET','/api/v1/flights/{departureId}','机票详情'],
+  ['商品','GET','/api/v1/trains/search','火车搜索'],['商品','GET','/api/v1/trains/{departureId}','火车详情'],
+  ['商品','GET','/api/v1/buses/search','汽车搜索'],['商品','GET','/api/v1/buses/{departureId}','汽车详情'],
+  ['商品','GET','/api/v1/transfers','接送搜索'],['商品','GET','/api/v1/transfers/{serviceId}','接送详情'],['商品','GET','/api/v1/transfers/{serviceId}/pricing','接送定价'],
+  ['会员','GET','/api/v1/me','用户资料'],['会员','GET','/api/v1/me/travelers','出行人列表'],['会员','POST','/api/v1/me/travelers','新增出行人'],['会员','PUT','/api/v1/me/travelers/{travelerId}','修改出行人'],['会员','DELETE','/api/v1/me/travelers/{travelerId}','删除出行人'],['会员','GET','/api/v1/me/member-account','会员账户'],['会员','GET','/api/v1/me/point-ledger','积分流水'],
+  ['订单','POST','/api/v1/orders','创建订单'],['订单','GET','/api/v1/orders','订单列表'],['订单','GET','/api/v1/orders/{orderId}','订单详情'],['订单','POST','/api/v1/orders/{orderId}/cancel','取消订单'],['订单','POST','/api/v1/orders/{orderId}/pay','发起支付'],['订单','POST','/api/v1/orders/{orderId}/payments','创建支付单'],['订单','GET','/api/v1/orders/{orderId}/payments','订单支付单'],['订单','POST','/api/v1/payments/callback','支付回调'],['订单','GET','/api/v1/payments/{paymentId}','支付单详情'],['订单','POST','/api/v1/payments/{paymentId}/close','关闭支付单'],
+  ['退款','POST','/api/v1/orders/{orderId}/items/{itemId}/refund-requests','发起退款'],['退款','GET','/api/v1/refund-requests','退款列表'],['退款','GET','/api/v1/refund-requests/{refundRequestId}','退款详情'],['退款','GET','/api/v1/orders/{orderId}/refund-records','退款流水']
+];
+let consoleFilter='全部';
+function ctxParam(name){
+  const p=String(name||'');
+  const v={orderId:CTX.orderId, refundRequestId:CTX.refundId, paymentNo:CTX.paymentNo,
+           hotelId:CTX.product&&CTX.product.refId, scenicSpotId:CTX.product&&CTX.product.refId,
+           serviceId:CTX.product&&CTX.product.refId, departureId:CTX.product&&CTX.product.refId}[p];
+  return v!=null?v:'';
+}
+function renderConsoleCtx(){
+  const el=document.getElementById('console-ctx');if(!el)return;
+  el.innerHTML='<b>当前会话：</b> 用户 #'+esc(currentUid())+
+    ' · 城市 '+esc(CTX.city||'未设置')+
+    ' · 商品 '+esc(CTX.product?(CTX.product.name||'').slice(0,18):'未选择')+
+    ' · 订单 '+esc(CTX.orderId?'#'+CTX.orderId:'未创建')+
+    ' · 支付单 '+esc(CTX.paymentNo||'未生成')+
+    ' &nbsp;<button class="btn sm ghost" onclick="openConsoleFor(\'/api/v1/orders/{orderId}\')">调试当前订单</button>'+
+    ' <button class="btn sm ghost" onclick="openConsoleFor(\'/api/v1/payments/callback\')">调试支付回调</button>';
+}
+function renderConsole(){
+  renderConsoleCtx();
+  const cats=['全部',...new Set(ENDPOINTS.map(e=>e[0]))];
+  document.getElementById('console-tabs').innerHTML=cats.map(c=>`<button class="${c===consoleFilter?'active':''}" onclick="consoleFilter='${c}';renderConsole()">${c}</button>`).join('');
+  const list=ENDPOINTS.filter(e=>consoleFilter==='全部'||e[0]===consoleFilter);
+  document.getElementById('console-list').innerHTML=`<table><tr><th>方法</th><th>路径</th><th>说明</th><th></th></tr>${list.map((e,i)=>`<tr><td><span class="method m-${e[1].toLowerCase()}">${e[1]}</span></td><td class="epi">${esc(e[2])}</td><td>${esc(e[3])}</td><td><button class="btn sm ghost" onclick="showEndpoint(${ENDPOINTS.indexOf(e)})">调用</button></td></tr>`).join('')}</table>`;
+}
+function showEndpoint(i){
+  const e=ENDPOINTS[i];
+  document.getElementById('console-panel').innerHTML=`<div class="card" style="margin-top:14px;background:#f9fafb;box-shadow:none">
+    <h2><span class="method m-${e[1].toLowerCase()}">${e[1]}</span> ${esc(e[3])}</h2>
+    <p class="desc epi">${esc(e[2])}</p>
+    <div id="ep-params"></div>
+    <div id="ep-body"></div>
+    <div class="actions"><button class="btn sm" id="ep-send">发送请求</button><button class="btn sm gray" id="ep-fillctx">带入当前会话参数</button></div>
+    <div id="ep-resp"></div></div>`;
+  // 解析路径参数
+  const params=[...e[2].matchAll(/\{(\w+)\}/g)].map(m=>m[1]);
+  let html='<div class="fields">';
+  html+=`<div class="field"><label>用户 ID（X-User-Id）</label><input id="ep-uid" value="${currentUid()}"></div>`;
+  params.forEach(p=>html+=`<div class="field"><label>${esc(p)}（路径参数）</label><input id="ep-p-${p}" value="${esc(ctxParam(p))}" placeholder="必填"></div>`);
+  if(e[2].includes('/search')||['/api/v1/hotels','/api/v1/scenic-spots','/api/v1/transfers','/api/v1/orders','/api/v1/refund-requests','/api/v1/me/travelers','/api/v1/me/point-ledger'].includes(e[2])){
+    html+=`<div class="field"><label>pageNo</label><input id="ep-q-pageNo" value="1"></div><div class="field"><label>pageSize</label><input id="ep-q-pageSize" value="10"></div>`;
+  }
+  html+='</div>';
+  document.getElementById('ep-params').innerHTML=html;
+  if(['POST','PUT'].includes(e[1])){
+    document.getElementById('ep-body').innerHTML=`<div class="field" style="margin-top:12px"><label>请求体 JSON（按需修改）</label><textarea id="ep-json">${esc(defaultBody(e[2]))}</textarea></div>`;
+  }
+  document.getElementById('ep-send').onclick=()=>sendEndpoint(e,params);
+  document.getElementById('ep-fillctx').onclick=()=>fillCtxIntoConsole(params);
+  document.getElementById('console-panel').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function fillCtxIntoConsole(params){
+  document.getElementById('ep-uid').value=currentUid();
+  (params||[]).forEach(p=>{const v=ctxParam(p);if(v){const el=document.getElementById('ep-p-'+p);if(el)el.value=v;}});
+  const ta=document.getElementById('ep-json');
+  if(ta){
+    try{
+      const b=JSON.parse(ta.value);
+      if('orderId' in b&&CTX.orderId)b.orderId=CTX.orderId;
+      if('paymentNo' in b&&CTX.paymentNo)b.paymentNo=CTX.paymentNo;
+      if('amount' in b&&CTX.amount)b.amount=CTX.amount;
+      if('requestedAmount' in b&&CTX.amount)b.requestedAmount=Math.min(100,CTX.amount);
+      ta.value=JSON.stringify(b,null,2);
+    }catch(e){}
+  }
+  toast('已带入当前用户 / 订单 / 支付单');
+}
+function defaultBody(path){
+  if(path==='/api/v1/orders')return JSON.stringify({orderTypeCode:'hotel_room',sourceChannelCode:'app',currencyCode:'CNY',items:[{productTypeCode:'hotel_room',productId:1,productName:'演示房型',checkInDate:daysFromNow(6),checkOutDate:daysFromNow(8),quantity:1}],usePoints:false},null,2);
+  if(path.endsWith('/pay'))return JSON.stringify({paymentMethodCode:'alipay',clientType:'app'},null,2);
+  if(path==='/api/v1/payments/callback')return JSON.stringify({paymentNo:CTX.paymentNo||'PAY...',orderId:CTX.orderId||0,paymentMethodCode:CTX.payMethod||'alipay',amount:CTX.amount||0,statusCode:'success',paidAt:'2026-11-19 10:45:00'},null,2);
+  if(path.includes('refund-requests'))return JSON.stringify({requestedAmount:100,reason:'演示退款'},null,2);
+  if(path.includes('travelers'))return JSON.stringify({travelerName:'张三',identityTypeCode:'id_card',identityNo:'110101199001011234',genderCode:'male',birthDate:'1990-01-01',phone:'13800000000',statusCode:'active'},null,2);
+  if(path.includes('/cancel'))return JSON.stringify({cancelReason:'演示取消'},null,2);
+  if(path.includes('/close'))return JSON.stringify({closeReason:'演示关闭'},null,2);
+  return '{}';
+}
+async function sendEndpoint(e,params){
+  let path=e[2];
+  params.forEach(p=>{const v=document.getElementById('ep-p-'+p)?.value;path=path.replace('{'+p+'}',v||ctxParam(p)||'1');});
+  const headers={'X-User-Id':document.getElementById('ep-uid').value};
+  if(path.includes('payments/callback'))headers['X-Demo-Payment-Signature']='mock-payment-signature';
+  const qParams={};
+  ['pageNo','pageSize'].forEach(k=>{const el=document.getElementById('ep-q-'+k);if(el)qParams[k]=el.value;});
+  let body; const ta=document.getElementById('ep-json'); if(ta){try{body=JSON.parse(ta.value);}catch{document.getElementById('ep-resp').innerHTML='<div class="resp">JSON 格式错误</div>';return;}}
+  const box=document.getElementById('ep-resp');box.innerHTML='<div class="loading"><span class="spin"></span>请求中...</div>';
+  const r=await api(path,{method:e[1],params:qParams,body,headers});
+  box.innerHTML=`<div class="result-head"><h3>响应 · ${r.status}</h3><span class="badge ${r.ok?'ok':'err'}">${r.ok?'成功':'失败'}</span></div><div class="resp">${esc(JSON.stringify(r.data,null,2))}</div>`;
+}
+
+/* ==================== 数据概览 ==================== */
+async function loadStats(){
+  const box=document.getElementById('stats');
+  box.innerHTML='<div class="loading"><span class="spin"></span>加载中...</div>';
+  const r=await api('/api/meta/overview');
+  if(!r.ok){box.innerHTML=`<div class="empty">${esc(JSON.stringify(r.data))}</div>`;return}
+  box.innerHTML=Object.entries(r.data.stats).map(([k,v])=>`<div class="stat"><div class="num">${Number(v).toLocaleString()}</div><div class="label">${esc(k)}</div></div>`).join('');
+}
+
+/* ==================== 事件绑定 ==================== */
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.remove('active'));
+  b.classList.add('active');currentType=b.dataset.type;buildFields();
+  document.getElementById('result').innerHTML='<div class="empty">点击"搜索"查看数据</div>';
+  document.getElementById('result-count').textContent='—';document.getElementById('detail').innerHTML='';
+});
+/* ==================== AI 行程助手 ==================== */
+const AI_CITY_NAME = id => (CITIES.find(c=>c[0]==id)||[,'该城市'])[1];
+// 攻略城市 → 真实 area_id：让后端检索到本地真实商品，避免用占位 areaId 拿到外地商品
+const KB_AREA = {'三亚':2197,'云南':2574,'厦门':1154,'张家界':1857,'成都':2278,'杭州':915};
+let aiPlanBusy=false, aiPlanTimer=null;
+async function aiGeneratePlan(){
+  if(aiPlanBusy) return;                       // 防重复点击
+  aiPlanBusy=true;
+  const btn=document.getElementById('btn-ai-plan'); if(btn)btn.disabled=true;
+  const [aid,city]=document.getElementById('ai-city').value.split('|');
+  const areaId = aid==='kb' ? (KB_AREA[city]||2) : +aid;   // 攻略城市按真实 areaId 取本地商品
+  const isKb = aid==='kb';
+  const days=+document.getElementById('ai-days').value;
+  const budget=+document.getElementById('ai-budget').value;
+  const pref=document.getElementById('ai-pref').value;
+  const box=document.getElementById('ai-result');
+  const t0=Date.now();
+  box.innerHTML=`<div class="card"><div class="loading"><span class="spin"></span>AI 正在结合${isKb?'平台商品 + 旅游攻略知识':'平台真实商品'}规划行程… 已等待 <b id="ai-elapsed" style="color:var(--primary)">0</b> 秒</div><div class="note" style="margin-top:8px">首次生成约需 8-15 秒，请耐心等待，生成期间按钮已锁定，无需重复点击。</div></div>`;
+  aiPlanTimer=setInterval(()=>{const el=document.getElementById('ai-elapsed');if(el)el.textContent=Math.round((Date.now()-t0)/1000);},1000);
+  try{
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:pref}});
+    if(!r.ok){box.innerHTML=`<div class="card"><div class="empty">生成失败：${esc(JSON.stringify(r.data))}</div></div>`;return}
+    applyPlanContext(r.data);
+    renderAIPlan(r.data);
+  }catch(e){
+    box.innerHTML=`<div class="card"><div class="empty">请求出错：${esc(e.message||String(e))}</div></div>`;
+  }finally{
+    aiPlanBusy=false; if(btn)btn.disabled=false;
+    if(aiPlanTimer){clearInterval(aiPlanTimer);aiPlanTimer=null;}
+  }
+}
+function renderAIPlan(d){
+  const box=document.getElementById('ai-result');
+  const powered=d.ai_powered?'<span class="ai-badge">✦ 真实 AI 生成</span>':'<span class="ai-badge" style="background:#d97706">本地推荐</span>';
+  const notice=d.notice?`<div class="note" style="color:#b45309;margin-bottom:12px">${esc(d.notice)}</div>`:'';
+  const recHtml=recs=>(recs||[]).filter(x=>x&&x.refId!=null).map(x=>
+    `<span class="ai-rec" onclick="aiBuy(${x.refId},'${esc(x.type||'')}','${esc(x.name||'')}')">${esc(x.name||'商品')} ${x.price!=null?'¥'+Number(x.price).toFixed(0):''} →</span>`
+  ).join('');
+  let html=`<div class="card" style="border-color:#fcd34d">${notice}
+    <h2>🗺️ ${esc(d.city||'')} ${esc(d.days||'')} 日行程 ${powered}</h2>
+    <p style="color:var(--muted);margin:8px 0 4px">${esc(d.summary||'')}</p>
+    <div style="margin-top:10px;font-size:13px">
+      <span class="tag">💰 预估花费 ¥${Number(d.estimated_cost||0).toFixed(0)}</span>
+      <span class="tag">🎯 预算 ¥${Number(d.budget||0).toFixed(0)}</span>
+      ${d.tips?`<div style="margin-top:10px;color:#b45309">💡 ${esc(d.tips)}</div>`:''}
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button class="btn sm ghost" onclick="syncPlanEverywhere()">↔ 同步城市到搜索 / 知识库 / 地图</button>
+      <button class="btn sm ghost" onclick="searchCityProducts('${esc(d.city||'')}')">搜索该城市商品 →</button>
+    </div></div>`;
+  (d.days_plan||[]).forEach(day=>{
+    html+=`<div class="ai-day"><h3>📅 ${esc(day.title||('第'+day.day+'天'))}</h3>
+      <div class="slot"><b>上午</b>${esc(day.morning||'自由活动')}</div>
+      <div class="slot"><b>下午</b>${esc(day.afternoon||'')}</div>
+      <div class="slot"><b>晚上</b>${esc(day.evening||'')}</div>
+      <div>${recHtml(day.recommendations)}</div></div>`;
+  });
+  if((d.hotels||[]).length){
+    html+=`<div class="card"><h2>🏨 推荐住宿</h2><div>${recHtml(d.hotels)}</div></div>`;
+  }
+  const refs=d.references||[];
+  if(refs.length){
+    html+=`<div class="card" style="border-color:#bbf7d0"><h2>📚 引用的攻略出处</h2><div class="tags">${refs.map(x=>`<span class="tag">${esc(x)}</span>`).join('')}</div><div class="note" style="margin-top:8px">本次行程参考了以上知识库攻略内容，来源可追溯。</div><button class="btn sm ghost" style="margin-top:8px" onclick="showKbForCity('${esc(d.city||'')}')">查看这些攻略 →</button></div>`;
+  }
+  // 一键把「完整行程对象」推送给地图，按天着色 + 时间轴可视化
+  const spots=[];
+  (d.days_plan||[]).forEach(day=>(day.recommendations||[]).forEach(x=>{if(x&&x.name&&!spots.includes(x.name))spots.push(x.name.split('-')[0]);}));
+  const dayCount=(d.days_plan||[]).length;
+  window.__lastPlan=d;   // 存完整对象，避免把大 JSON 塞进 onclick
+  html+=`<div class="card" style="border-color:#c7d2fe;background:linear-gradient(180deg,#fafbff,#fff)">
+    <h2>✦ 把这份行程画到地图上 <span class="api-tag" style="background:#eef0ff;color:#4f46e5">AI × 地图联动</span></h2>
+    <p class="desc" style="margin:6px 0 10px">按 <b>${dayCount}</b> 天分色打点连线，生成每日时间轴、景点详情气泡与逐天聚焦视图；行程的时段安排、推荐商品、预算花费和攻略出处会一并同步到地图页。</p>
+    <div class="tags" style="margin-bottom:10px">${(d.days_plan||[]).map((day,i)=>`<span class="tag" style="border-left:3px solid ${['#e11d48','#2563eb','#059669','#d97706','#7c3aed'][i%5]}">第${i+1}天 ${(day.recommendations||[]).length} 个点</span>`).join('')}</div>
+    <div class="actions" style="margin-top:0">
+      <button class="btn" style="background:#4f46e5" onclick="openPlanOnMap()">✦ 在地图上查看完整行程</button>
+      ${spots.length?`<button class="btn sm ghost" onclick="sendPlanToMap(${JSON.stringify(spots.slice(0,8)).replace(/\"/g,'&quot;')},'${esc(d.city||'')}')">仅看简化线路</button>`:''}
+    </div></div>`;
+  html+='<div class="note">点击带价格的商品标签即可跳到下单流程，系统会自动带入商品参数。</div>';
+  box.innerHTML=html;
+}
+/* AI 推荐商品 → 跳到下单：refId 已是房型/票种/服务ID，直接构造 suggest 结果 */
+async function aiBuy(refId,type,name){
+  const typeMap={hotel:'hotel_room',scenic:'scenic_ticket',transfer:'transfer_service'};
+  const ptype=typeMap[type]||type||'hotel_room';
+  const item={productTypeCode:ptype,productId:+refId,productName:name,quantity:1};
+  if(ptype==='hotel_room'){item.checkInDate=daysFromNow(6);item.checkOutDate=daysFromNow(8);}
+  else {item.travelTime=daysFromNow(6)+' 09:00:00';}
+  if(['flight_cabin','train_seat','bus_seat'].includes(ptype)){
+    const r=await api('/api/v1/me/travelers',{params:{pageNo:1,pageSize:1},headers:{'X-User-Id':currentUid()}});
+    const tid=r.data?.list?.[0]?.travelerId; if(tid)item.travelerIds=[tid];
+  }
+  setCtx({product:{name,refId:+refId,type:ptype,price:null},orderId:null,paymentNo:null,paid:false,refundId:null});
+  trade={step:1,orderId:null,items:[],paymentNo:null,amount:null,
+    preset:{ok:true,orderTypeCode:ptype,item,needsTraveler:false}};
+  setFlow('trade'); switchPanel('trade'); renderTrade();
+  document.getElementById('t-resp').innerHTML=`<div class="note" style="color:#1a7f37">已从 AI 行程带入：<b>${esc(name)}</b>。下单后订单与积分会自动同步到全站状态条。</div>`;
+  toast('已从 AI 行程带入商品：'+name);
+}
+let aiChatBusy=false;
+async function aiChat(){
+  if(aiChatBusy)return;
+  aiChatBusy=true;
+  const btn=document.getElementById('btn-ai-chat'); if(btn)btn.disabled=true;
+  const q=document.getElementById('ai-question').value.trim();
+  const box=document.getElementById('ai-chat-answer');
+  if(!q){box.innerHTML='<div class="empty">请输入问题</div>';aiChatBusy=false;if(btn)btn.disabled=false;return}
+  const [aid,city]=document.getElementById('ai-city').value.split('|');
+  const areaId=aid==='kb'?(KB_AREA[city]||2):+aid;
+  const t0=Date.now();
+  box.innerHTML='<div class="loading"><span class="spin"></span>AI 思考中… <b id="chat-elapsed">0</b> 秒</div>';
+  const timer=setInterval(()=>{const el=document.getElementById('chat-elapsed');if(el)el.textContent=Math.round((Date.now()-t0)/1000);},1000);
+  try{
+    const r=await api('/api/ai/chat',{method:'POST',body:{message:q,areaId, city:city||''}});
+    let srcHtml='';
+    const srcs=r.data.kb_sources||[];
+    if(srcs.length)srcHtml=`<div class="tags" style="margin-top:8px">${srcs.map(s=>`<span class="tag">📚 ${esc(s.source)}</span>`).join('')}</div>
+      <div class="actions" style="margin-top:8px"><button class="btn sm ghost" onclick="showKbForCity('${esc(city||'')}')">在知识库查看来源 →</button></div>`;
+    box.innerHTML=`<div class="card" style="margin:0;border-color:#fcd34d"><div style="display:flex;gap:8px;align-items:flex-start"><b>✦ AI：</b><div>${esc(r.data.answer||JSON.stringify(r.data))}</div></div>${srcHtml}</div>`;
+  }catch(e){
+    box.innerHTML=`<div class="empty">请求出错：${esc(e.message||String(e))}</div>`;
+  }finally{
+    aiChatBusy=false; if(btn)btn.disabled=false; clearInterval(timer);
+  }
+}
+
+/* 统一面板切换 + 顶部流程条状态 */
+let flowStage='search';
+function setFlow(stage){
+  flowStage=stage;
+  const map={search:'search',trade:'trade',pay:'pay',refund:'refund'};
+  const activePanel={search:'search',trade:'trade',pay:'trade',refund:'refund'}[stage]||stage;
+  const order=['search','trade','pay','refund'];
+  const cur=order.indexOf(stage);
+  document.querySelectorAll('.flow-step').forEach(el=>{
+    const s=el.dataset.fs, i=order.indexOf(s);
+    el.classList.toggle('active',s===stage);
+    el.classList.toggle('done',i<cur);
+  });
+  return activePanel;
+}
+function switchPanel(p){
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.panel===p));
+  document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));
+  const el=document.getElementById('panel-'+p); if(el)el.classList.add('active');
+  if(p==='trade')renderTrade();
+  if(p==='overview')loadStats();
+  if(p==='console')renderConsole();
+  if(p==='member')loadMember();
+  if(p==='refund'){loadRefundableItems();loadRefundList();}
+  if(p==='kb')loadKbStats();
+  if(p==='map'){
+    renderMapCitySpots();
+    // 面板刚变为可见，通知 iframe 重算尺寸并重绘（隐藏时容器宽高为 0 会导致建图失败）
+    const f=document.getElementById('map-frame');
+    if(f&&f.contentWindow)setTimeout(()=>{try{f.contentWindow.postMessage({type:'map-show'},'*');}catch(e){}},120);
+  }
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+/* ==================== 旅游知识库 ==================== */
+async function loadKbStats(){
+  const box=document.getElementById('kb-stats'); if(!box)return;
+  try{
+    const s=await api('/api/meta/kb/stats');
+    const d=s.data||{};
+    const types=Object.entries(d.byType||{}).map(([k,v])=>`<span class="tag">${esc(k)} ${v}</span>`).join('');
+    box.innerHTML=`<b style="color:var(--text)">${d.chunks||0} 个知识切片</b> · ${(d.cities||[]).length} 个城市 &nbsp; ${types}`;
+  }catch(e){box.textContent='知识库状态加载失败';}
+}
+async function doKbSearch(){
+  const q=document.getElementById('kb-q').value.trim();
+  const city=document.getElementById('kb-city').value;
+  const type=document.getElementById('kb-type').value;
+  const box=document.getElementById('kb-result');
+  box.innerHTML='<div class="card"><div class="loading"><span class="spin"></span>检索中…</div></div>';
+  try{
+    const params={q,city,type,topK:8};
+    const r=await api('/api/meta/kb/search',{params});
+    const items=(r.data&&r.data.items)||[];
+    if(!items.length){box.innerHTML='<div class="card"><div class="empty">没有匹配的攻略片段，换个关键词试试。</div></div>';return}
+    window.__lastKbItems=items;
+    box.innerHTML=`<div class="card"><h2>检索结果 <span class="api-tag">${r.data.total} 条</span></h2>`+
+      items.map((it,idx)=>`<div class="item" style="display:block"><div class="main">
+        <h4>${esc(it.title)} <span class="tag">${esc(it.contentType)}</span> <span class="tag">${esc(it.city)}</span></h4>
+        <div class="sub" style="white-space:pre-wrap;margin:6px 0">${esc(it.text)}</div>
+        <div class="sub" style="color:#16a34a">出处：${esc(it.source)}</div>
+        <div class="actions" style="margin-top:8px">
+          <button class="btn sm ghost" onclick="askAIAbout(${idx})">让 AI 讲讲这段攻略 →</button>
+          <button class="btn sm ghost" onclick="searchCityProducts('${esc(it.city||'')}')">搜该城市商品 →</button>
+        </div>
+      </div></div>`).join('')+'</div>';
+  }catch(e){box.innerHTML=`<div class="card"><div class="empty">检索出错：${esc(e.message||e)}</div></div>`;}
+}
+function showKbForCity(city){
+  const c=String(city||'').replace(/[市省]$/,'');
+  setCityContext(c,KB_AREA[c]);
+  switchPanel('kb');
+  document.getElementById('kb-q').value='';
+  loadKbStats(); doKbSearch();
+  toast('已定位到「'+c+'」的攻略');
+}
+/* 知识库片段 → AI 问答：把出处内容直接写进问题并自动提问 */
+function askAIAbout(i){
+  const it=(window.__lastKbItems||[])[i];if(!it)return;
+  const clean=String(it.city||'').replace(/[市省]$/,'');
+  if(clean)setCityContext(clean,KB_AREA[clean]);
+  document.getElementById('ai-question').value='请根据这段攻略，给我一个可落地的行程建议：'+String(it.title||'')+'。'+String(it.text||'').slice(0,180);
+  switchPanel('ai');
+  aiChat();
+  toast('已把攻略「'+String(it.title||'').slice(0,14)+'」交给 AI');
+}
+/* 任意面板 → 商品搜索，并自动带上当前城市 */
+function searchCityProducts(city){
+  const c=String(city||CTX.city||'').replace(/[市省]$/,'');
+  if(c)setCityContext(c,KB_AREA[c]);
+  setFlow('search');switchPanel('search');
+  doSearch();
+  toast('已搜索「'+(c||'当前城市')+'」的商品');
+}
+
+/* ==================== 线路地图（独立交互页面） ==================== */
+const MAP_SPOTS={
+  '三亚':['亚龙湾','蜈支洲岛','天涯海角','南山文化旅游区','海棠湾','鹿回头','西岛'],
+  '云南':['大理古城','洱海','丽江古城','玉龙雪山','石林','滇池','泸沽湖'],
+  '厦门':['鼓浪屿','中山路','沙坡尾','曾厝垵','环岛路','南普陀寺'],
+  '张家界':['张家界国家森林公园','天门山','武陵源','袁家界','金鞭溪'],
+  '成都':['大熊猫繁育研究基地','宽窄巷子','武侯祠','锦里','春熙路','都江堰'],
+  '杭州':['西湖','灵隐寺','龙井','河坊街','西溪湿地','雷峰塔']
+};
+function renderMapCitySpots(){
+  const box=document.getElementById('map-city-spots'); if(!box)return;
+  box.innerHTML=Object.entries(MAP_SPOTS).map(([c,arr])=>
+    `<span class="tag" style="cursor:pointer;${CTX.city===c?'border-color:#4f46e5;background:#eef0ff;color:#4f46e5':''}" onclick="openMapCity('${c}')">${c} (${arr.length})</span>`
+  ).join('');
+}
+function openMapCity(c){
+  setCityContext(c,KB_AREA[c]);
+  openMapWith(c,(MAP_SPOTS[c]||[]).join(','));
+  renderMapCitySpots();
+}
+function openMapWith(city,spots){
+  // 地图已内嵌为同源 iframe（/map，Key 由后端注入），直接把线路通过 hash 送进去绘制。
+  // 重设 src 会重载 iframe 回到「自由绘制」，因此清掉待推送的 AI 行程，避免又被推回去。
+  pendingPlan=null;
+  const params='city='+encodeURIComponent(city||'')+'&spots='+encodeURIComponent(spots||'');
+  const frame=document.getElementById('map-frame');
+  if(frame){switchPanel('map');frame.src='/map#'+params;}
+  else window.open('/map#'+params,'_blank');
+}
+function sendPlanToMap(spots,city){
+  const c=(['三亚','云南','厦门','张家界','成都','杭州'].includes(city))?city:'三亚';
+  openMapWith(c,(spots||[]).join(','));
+}
+/* ===== AI 行程 × 地图：把完整行程对象推送进 iframe ===== */
+let pendingPlan=null;
+function pushPlanToFrame(){
+  const f=document.getElementById('map-frame');
+  if(f&&f.contentWindow&&pendingPlan){
+    f.contentWindow.postMessage({type:'ai-plan',plan:pendingPlan},'*');
+  }
+}
+function openPlanOnMap(){
+  const d=window.__lastPlan;
+  if(!d||!d.days_plan){alert('请先生成一份 AI 行程');return;}
+  pendingPlan=Object.assign({},d,{_uid:Date.now()+'_'+Math.random().toString(36).slice(2,7)});
+  switchPanel('map');
+  // iframe 可能尚未 ready，延迟多发几次（地图页对同一 _uid 幂等）
+  [180,600,1200].forEach(t=>setTimeout(pushPlanToFrame,t));
+}
+// 地图页 load 完成会回报 map-ready；同时响应「回 AI 行程助手」
+window.addEventListener('message',e=>{
+  const d=e.data||{};
+  if(d.type==='map-ready'&&pendingPlan)pushPlanToFrame();
+  else if(d.type==='goto-ai')switchPanel('ai');
+});
+
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+  const p=b.dataset.panel;
+  switchPanel(p);
+  if(p==='ai'){document.querySelectorAll('.flow-step').forEach(el=>{el.classList.remove('active','done')});}
+  if(p==='search')setFlow('search');
+  else if(p==='trade')setFlow('trade');
+  else if(p==='refund')setFlow('refund');
+});
+document.querySelectorAll('.flow-step').forEach(el=>el.onclick=()=>{
+  const s=el.dataset.fs, panel=setFlow(s);
+  switchPanel(panel);
+});
+document.querySelectorAll('#steps .step').forEach(s=>s.onclick=()=>{
+  const n=+s.dataset.s;if(n<=trade.step){trade.step=n;renderTrade();setFlow(n>=3?'pay':'trade');}
+});
+document.getElementById('btn-ai-plan').onclick=aiGeneratePlan;
+document.getElementById('btn-ai-chat').onclick=aiChat;
+document.getElementById('btn-kb-search').onclick=doKbSearch;
+document.getElementById('kb-q').addEventListener('keydown',e=>{if(e.key==='Enter')doKbSearch();});
+const _btnOpenMap=document.getElementById('btn-open-map');
+if(_btnOpenMap)_btnOpenMap.onclick=()=>openMapWith('三亚',MAP_SPOTS['三亚'].join(','));
+document.getElementById('ai-question').addEventListener('keydown',e=>{if(e.key==='Enter')aiChat();});
+document.getElementById('btn-search').onclick=doSearch;
+document.getElementById('btn-reset').onclick=buildFields;
+document.getElementById('btn-member-load').onclick=loadMember;
+document.getElementById('btn-trav-list').onclick=loadTravelers;
+document.getElementById('btn-trav-add').onclick=()=>travForm();
+document.getElementById('btn-points').onclick=loadPoints;
+document.getElementById('btn-refund-create').onclick=createRefund;
+document.getElementById('btn-refund-list').onclick=loadRefundList;
+document.getElementById('btn-refund-load').onclick=loadRefundableItems;
+document.getElementById('refund-uid').addEventListener('change',()=>{
+  setCtx({userId:document.getElementById('refund-uid').value||'1'});
+  loadRefundableItems();loadRefundList();
+});
+/* 任一面板切换用户 ID，全站所有面板与接口请求头同步 */
+document.addEventListener('change',e=>{
+  if(!e.target.matches('input[id$="-uid"]'))return;
+  const u=e.target.value||'1';
+  if(String(CTX.userId)!==String(u)){
+    setCtx({userId:u});
+    toast('当前用户已切换为 #'+u+'，所有面板同步生效');
+  }
+});
+restoreCtx();          // 恢复上次演示的会话状态
+syncUidInputs(currentUid());
+renderCtxBar();
+comboInit();
+upgradeAllSelects();
+// 动态渲染出来的 select（交易面板、旅客表单等）也要升级
+new MutationObserver(()=>upgradeAllSelects()).observe(document.body,{childList:true,subtree:true});
+buildFields();
+loadCities();  // 从后端加载全部城市，完成后自动刷新已渲染的下拉
