@@ -22,6 +22,7 @@ cloudflared.exe
 t.log
 test_tunnel.log
 *.tmp
+*.bak_beforeimg
 
 # ===== 服务器运行时目录（由 CI/CD 维护，不纳入版本控制）=====
 # 只忽略仓库根目录的 static（Docker 挂载卷，由 deploy.yml 同步覆盖）。
