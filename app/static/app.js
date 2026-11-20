@@ -1839,3 +1839,52 @@ async function simulatePayFail(){
   await payCallback();
 }
 
+/* ==================== 图片匹配修正（覆盖上方旧版）：酒店不配图，景区精确匹配 ==================== */
+/* 说明：旧版 spotPhoto 存在两个问题——① 酒店/机票等借用了景点图库；
+   ② skyline/temple/oldstreet 轮换组混入 forbidden,且 CITY_STRONG 会覆盖已匹配的景点名，
+      导致「北京饭店」「王府井酒店」等命中故宫图。此处重定义彻底修正。 */
+const SCENIC_ALIAS = [
+  ['panda',   ['熊猫','panda','竹子','成都大熊猫']],
+  ['greatwall',['长城','八达岭','慕田峪','居庸关','司马台']],
+  ['forbidden',['故宫','紫禁','博物院','颐和园','天坛','天安门','太和殿']],
+  ['peak',    ['张家界','天门山','黄山','泰山','华山','峨眉','云海','乾坤','玻璃栈道','武陵源','石峰','山峰']],
+  ['beach',   ['海滩','沙滩','亚龙湾','海棠湾','大东海','三亚湾','天涯海角','蜈支洲','西岛','椰','海滨','日出']],
+  ['surf',    ['冲浪','潜水','海浪','玩海','水上','漂流']],
+  ['coast',   ['鼓浪屿','海岛','海岸','海湾','屿','海边','海岸线']],
+  ['karst',   ['桂林','阳朔','漓江','石林','喀斯特','九乡','西双版纳','山水']],
+  ['lake',    ['西湖','洱海','滇池','千岛湖','太湖','湖光','湖畔','池塘','湖']],
+  ['temple',  ['寺','庙','塔','观音','灵隐','布达拉','佛','道观','教堂']],
+  ['oldstreet',['古镇','古城','古街','宽窄','锦里','丽江','大理','周庄','乌镇','民居','村落','老街']],
+  ['forest',  ['森林','雨林','植物园','竹海','林海','氧吧','热带天堂','绿道','森林公园']],
+  ['mountain',['山','岭','九寨','黄龙','雪山','峡谷']]
+];
+const SCENIC_CITY={'三亚':'beach','厦门':'coast','青岛':'coast','杭州':'lake','桂林':'karst',
+  '张家界':'peak','成都':'panda','丽江':'oldstreet','大理':'lake','海南':'beach'};
+const SAFE_GROUP={beach:['beach','coast'],coast:['coast','beach'],surf:['surf','beach'],
+  mountain:['mountain','peak','forest'],peak:['peak','mountain'],lake:['lake','karst'],
+  karst:['karst','lake','mountain'],panda:['panda','forest'],temple:['temple','oldstreet'],
+  forbidden:['forbidden'],greatwall:['greatwall','mountain'],
+  oldstreet:['oldstreet','temple'],forest:['forest','mountain']};
+function spotPhoto(name,city,type){
+  // ① 类型闸门：只有景点(scenic)才配图；酒店/机票/火车/接送一律无图
+  const t=String(type||'');
+  if(t && t!=='scenic' && t!=='scenic_ticket') return '';
+  // ② 酒店特征词兜底拦截：即使调用方误传 scenic，酒店名也不配图
+  const nm=String(name||'');
+  if(/酒店|大床房|双床房|房型|客栈|民宿|迎宾馆|宾馆|度假村|套房|标间|饭店/.test(nm)) return '';
+  const text=nm+' '+String(city||'');
+  // ③ 景点名精确匹配（移除「王府/园林/大厦/街」等宽泛误伤词）
+  let key=null;
+  for(const pair of SCENIC_ALIAS){ if(pair[1].some(w=>text.indexOf(w)>=0)){key=pair[0];break;} }
+  // ④ 城市兜底：仅当景点名完全没匹配到时才用（不再粗暴覆盖已匹配结果）
+  if(!key){ const clean=String(city||'').replace(/[市省]$/,''); key=SCENIC_CITY[clean]||'mountain'; }
+  // ⑤ 一眼可辨的地标图唯一锁定，不参与轮换
+  if(key==='forbidden'||key==='greatwall'||key==='panda')
+    return (window.SPOT_IMGS||{})[key]||'';
+  // ⑥ 同类安全轮换（组内已剔除 forbidden）
+  const imgs=window.SPOT_IMGS||{};
+  const group=SAFE_GROUP[key]||[key];
+  const pick=group[hashStr(text)%group.length];
+  return imgs[pick]||imgs[group[0]]||'';
+}
+
