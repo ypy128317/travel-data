@@ -147,6 +147,8 @@ class OrderSuggestBody(BaseModel):
     date: str
     returnDate: str | None = None
     userId: int = 1
+    # 展示给用户的具体SKU/舱位ID：传入后锁定该商品，保证展示价=实付价
+    inventoryId: int | None = None
 
 
 def _first_traveler(user_id: int) -> int | None:
@@ -218,18 +220,33 @@ def order_suggest(body: OrderSuggestBody) -> dict[str, Any]:
         rt = {"flight": "flight_routes", "train": "train_routes", "bus": "bus_routes"}[t]
         name_col = {"flight": "flight_no", "train": "train_no", "bus": "route_name"}[t]
         cls_col = {"flight": "cabin_class_code", "train": "seat_class_code", "bus": "seat_class_code"}[t]
-        row = fetch_one(
-            f"""
-            SELECT i.id AS pid, CONCAT(r.{name_col},'-',i.{cls_col}) AS pname,
-                   d.departure_time AS dep_time
-            FROM {inv} i
-            JOIN {dep} d ON d.id=i.{fk} AND d.status_code='scheduled'
-            JOIN {rt} r ON r.id=d.{rk} AND r.status_code='active'
-            WHERE d.id=%s AND i.status_code='active' AND i.available_inventory>0
-            ORDER BY i.sale_price_amount ASC, i.id ASC LIMIT 1
-            """,
-            (rid,),
-        )
+        # 锁定展示时看到的具体舱位：传入 inventoryId 且仍可售时用之，否则回退价格最低
+        if body.inventoryId:
+            row = fetch_one(
+                f"""
+                SELECT i.id AS pid, CONCAT(r.{name_col},'-',i.{cls_col}) AS pname,
+                       d.departure_time AS dep_time
+                FROM {inv} i
+                JOIN {dep} d ON d.id=i.{fk} AND d.status_code='scheduled'
+                JOIN {rt} r ON r.id=d.{rk} AND r.status_code='active'
+                WHERE i.id=%s AND d.id=%s AND i.status_code='active' AND i.available_inventory>0
+                LIMIT 1
+                """,
+                (body.inventoryId, rid),
+            )
+        else:
+            row = fetch_one(
+                f"""
+                SELECT i.id AS pid, CONCAT(r.{name_col},'-',i.{cls_col}) AS pname,
+                       d.departure_time AS dep_time
+                FROM {inv} i
+                JOIN {dep} d ON d.id=i.{fk} AND d.status_code='scheduled'
+                JOIN {rt} r ON r.id=d.{rk} AND r.status_code='active'
+                WHERE d.id=%s AND i.status_code='active' AND i.available_inventory>0
+                ORDER BY i.sale_price_amount ASC, i.id ASC LIMIT 1
+                """,
+                (rid,),
+            )
         if row:
             dep_time = row["dep_time"].strftime("%Y-%m-%d %H:%M:%S")
             traveler = _first_traveler(body.userId)

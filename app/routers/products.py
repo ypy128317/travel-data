@@ -697,7 +697,8 @@ def search_flights(
             r.duration_minutes,
             MIN(i.sale_price_amount) AS min_sale_price_amount,
             MIN(i.currency_code) AS currency_code,
-            GROUP_CONCAT(DISTINCT i.cabin_class_code ORDER BY i.cabin_class_code) AS cabin_classes
+            GROUP_CONCAT(DISTINCT i.cabin_class_code ORDER BY i.cabin_class_code) AS cabin_classes,
+            SUBSTRING_INDEX(GROUP_CONCAT(i.id ORDER BY i.sale_price_amount ASC, i.id ASC), ',', 1) AS min_price_inventory_id
         FROM flight_routes r
         JOIN flight_departures d ON d.flight_route_id = r.id
         JOIN flight_cabin_inventory i ON i.flight_departure_id = d.id
@@ -741,6 +742,9 @@ def search_flights(
                 "arrivalTime": row["arrival_time"].strftime("%Y-%m-%d %H:%M:%S"),
                 "durationMinutes": row["duration_minutes"],
                 "minSalePriceAmount": float(row["min_sale_price_amount"]),
+                "minPriceInventoryId": int(row["min_price_inventory_id"])
+                if row["min_price_inventory_id"]
+                else None,
                 "currencyCode": row["currency_code"],
                 "availableCabinClasses": row["cabin_classes"].split(",")
                 if row["cabin_classes"]

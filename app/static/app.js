@@ -373,6 +373,8 @@ async function buyThis(i){
     date:p[dateKey]||daysFromNow(6),
     returnDate:p.checkOutDate||null,
     userId:+currentUid(),
+    // 锁定展示价对应的舱位/SKU，保证卡片价格与实际下单价格一致
+    inventoryId:(x.minPriceInventoryId||x.min_price_inventory_id||null),
   };
   const box=document.getElementById('result');
   const r=await api('/api/meta/order-suggest',{method:'POST',body:payload});
@@ -1016,7 +1018,8 @@ async function agentBuyFlight(depId){
   let sug=null;
   try{
     sug=await api('/api/meta/order-suggest',{method:'POST',body:{
-      type:'flight',refId:depId,date:f.departureDate||daysFromNow(6),userId:+currentUid()
+      type:'flight',refId:depId,date:f.departureDate||daysFromNow(6),userId:+currentUid(),
+      inventoryId:f.minPriceInventoryId||null
     }});
   }catch(e){}
   if(!sug||!sug.ok||!sug.data?.ok){
