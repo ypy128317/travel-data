@@ -226,7 +226,7 @@ def order_suggest(body: OrderSuggestBody) -> dict[str, Any]:
             JOIN {dep} d ON d.id=i.{fk} AND d.status_code='scheduled'
             JOIN {rt} r ON r.id=d.{rk} AND r.status_code='active'
             WHERE d.id=%s AND i.status_code='active' AND i.available_inventory>0
-            ORDER BY i.id LIMIT 1
+            ORDER BY i.sale_price_amount ASC, i.id ASC LIMIT 1
             """,
             (rid,),
         )
