@@ -38,7 +38,17 @@ jobs:
           [ -d .git ] || $GIT init -q
           $GIT remote get-url origin >/dev/null 2>&1 || \
             $GIT remote add origin https://github.com/ypy128317/travel-data.git
-          if ! FETCH_OUT=$($GIT fetch origin main 2>&1); then
+          FETCH_OK=0
+          for attempt in 1 2 3; do
+            echo "=== git fetch attempt ${attempt}/3 ==="
+            if FETCH_OUT=$($GIT -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch origin main 2>&1); then
+              FETCH_OK=1
+              break
+            fi
+            echo "fetch 失败，10 秒后重试: $(echo "$FETCH_OUT" | tr '\n' ' ')"
+            sleep 10
+          done
+          if [ "$FETCH_OK" != "1" ]; then
             echo "::error::git fetch 失败: $(echo "$FETCH_OUT" | tr '\n' ' ')"
             echo "::error::git 版本: $(git --version 2>&1)"
             echo "::error::remote: $($GIT remote -v 2>&1 | head -2 | tr '\n' ' ')"
