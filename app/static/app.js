@@ -913,6 +913,11 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 /* ===== AI Agent 一句话全自动编排 ===== */
 let agentBusy=false;
+function familyPref(){
+  const child=document.getElementById('ai-child')?.value||'4-6';
+  const pace=document.getElementById('ai-pace')?.value||'轻松';
+  return `亲子游；孩子${child}岁；节奏${pace}；优先亲子酒店、午休和室内备选`;
+}
 async function agentPlan(){
   if(agentBusy)return;
   const q=document.getElementById('agent-query')?.value.trim();
@@ -938,7 +943,7 @@ async function agentPlan(){
     // 步骤2：生成行程（复用真实 AI 接口）
     renderAgentSteps('doing','plan');
     const areaId=KB_AREA[info.city]||info.areaId||2;
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:info.pref}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:[info.pref,familyPref()].filter(Boolean).join('；')}});
     if(!r.ok){renderAgentSteps('done');toast('行程生成失败，请重试');return;}
     window.__planChat=[];
     applyPlanContext(r.data);
@@ -1095,7 +1100,7 @@ async function aiGeneratePlan(){
   box.innerHTML=`<div class="card"><div class="loading"><span class="spin"></span>AI 正在结合${isKb?'平台商品 + 旅游攻略知识':'平台真实商品'}规划行程… 已等待 <b id="ai-elapsed" style="color:var(--primary)">0</b> 秒</div><div class="note" style="margin-top:8px">首次生成约需 8-15 秒，请耐心等待，生成期间按钮已锁定，无需重复点击。</div></div>`;
   aiPlanTimer=setInterval(()=>{const el=document.getElementById('ai-elapsed');if(el)el.textContent=Math.round((Date.now()-t0)/1000);},1000);
   try{
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:pref}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:[pref,familyPref()].filter(Boolean).join('；')}});
     if(!r.ok){box.innerHTML=`<div class="card"><div class="empty">生成失败：${esc(JSON.stringify(r.data))}</div></div>`;return}
     window.__planChat=[];   // 新行程：清空微调对话历史
     applyPlanContext(r.data);
@@ -1154,17 +1159,6 @@ function renderAIPlan(d){
       <button class="btn sm poster-btn" onclick="makePoster()">📷 生成行程海报</button>
       <button class="btn sm ghost" onclick="syncPlanEverywhere()">↔ 同步城市到搜索 / 知识库 / 地图</button>
       <button class="btn sm ghost" onclick="searchCityProducts('${esc(d.city||'')}')">搜索该城市商品 →</button>
-      <button class="btn sm" style="background:#0f766e;color:#fff" onclick="showConcierge()">找真人顾问帮我把关 →</button>
-    </div>
-    <div id="concierge-box" style="display:none;margin-top:12px;padding:12px;border:1px solid #99f6e4;background:#f0fdfa;border-radius:10px">
-      <div style="font-size:13px;font-weight:700;color:#0f766e;margin-bottom:6px">把这份行程交给真人顾问</div>
-      <div style="font-size:12px;color:#475467;margin-bottom:8px">默认自己规划；只有你主动提交，顾问才会联系你。</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <input id="concierge-name" placeholder="怎么称呼您" style="flex:1;min-width:120px;padding:7px 9px;border:1px solid #dbe4ef;border-radius:7px">
-        <input id="concierge-phone" placeholder="手机号（选填）" style="flex:1;min-width:140px;padding:7px 9px;border:1px solid #dbe4ef;border-radius:7px">
-        <button class="btn sm" style="background:#0f766e;color:#fff" onclick="submitConcierge()">提交给顾问</button>
-      </div>
-      <div id="concierge-status" style="font-size:11px;color:#0f766e;margin-top:5px"></div>
     </div></div>`;
   // 对话式微调：在现有行程基础上用大白话继续改
   const changes=d.changes?`<div class="note" style="color:#6d28d9;margin-bottom:10px">✦ 本次调整：${esc(d.changes)}</div>`:'';
@@ -1221,30 +1215,6 @@ function renderAIPlan(d){
   html+='<div class="note">点击带价格的商品标签即可跳到下单流程，系统会自动带入商品参数。</div>';
   box.innerHTML=html;
 }
-function showConcierge(){
-  const box=document.getElementById('concierge-box');
-  if(box) box.style.display='block';
-}
-async function submitConcierge(){
-  const name=(document.getElementById('concierge-name')?.value||'').trim();
-  const phone=(document.getElementById('concierge-phone')?.value||'').trim();
-  const status=document.getElementById('concierge-status');
-  if(!name){toast('请先填写称呼');return}
-  const plan=window.__lastPlan;
-  if(!plan){toast('行程还没有生成');return}
-  if(status) status.textContent='正在提交给顾问…';
-  try{
-    const r=await api('/api/inquiries',{method:'POST',headers:{'X-User-Id':currentUid()},body:{
-      customerName:name,customerPhone:phone,city:plan.city||'',days:plan.days||3,
-      budget:plan.budget||0,preferences:(document.getElementById('ai-pref')?.value||''),
-      plan,userId:+currentUid()
-    }});
-    if(!r.ok){if(status) status.textContent=r.data?.detail||'提交失败';return}
-    if(status) status.textContent='已提交给顾问。默认仍可自己规划、自己下单，顾问不会自动改你的行程。';
-    toast('已把你的行程和联系方式发给顾问');
-  }catch(e){if(status) status.textContent='提交失败：'+(e.message||'网络错误')}
-}
-
 /* AI 推荐商品 → 跳到下单：refId 已是房型/票种/服务ID，直接构造 suggest 结果 */
 async function aiBuy(refId,type,name){
   const typeMap={hotel:'hotel_room',scenic:'scenic_ticket',transfer:'transfer_service'};

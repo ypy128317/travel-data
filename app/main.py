@@ -12,11 +12,11 @@ from pydantic import BaseModel
 
 from .config import APP_PORT, TMAP_KEY
 from .database import fetch_all, fetch_one
-from .routers import ai, guides, inquiries, orders, products, quotes, refunds, users
+from .routers import ai, guides, orders, products, refunds, users
 
 app = FastAPI(
-    title="旅游平台业务数据 API",
-    description="旅游平台一站式出行产品的查询、下单、支付与售后接口。",
+    title="云游亲子 · AI 亲子旅行规划 API",
+    description="面向带娃家庭的 AI 行程规划、商品查询、下单、支付与售后接口。",
     version="0.1.0",
 )
 
@@ -26,14 +26,8 @@ app.include_router(orders.router)
 app.include_router(refunds.router)
 app.include_router(ai.router)
 app.include_router(guides.router)
-app.include_router(quotes.router)
-app.include_router(inquiries.router)
 
 
-@app.on_event("startup")
-def ensure_quote_table() -> None:
-    quotes.ensure_table()
-    inquiries.ensure_table()
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -60,25 +54,6 @@ def app_page() -> Response:
 def app_script() -> Response:
     return _no_cache(FileResponse(STATIC_DIR / "app.js", media_type="application/javascript"))
 
-
-@app.get("/sales", tags=["meta"], include_in_schema=False)
-def sales_page() -> Response:
-    return _no_cache(FileResponse(STATIC_DIR / "sales.html"))
-
-
-@app.get("/quote/{token}", tags=["meta"], include_in_schema=False)
-def quote_page(token: str) -> Response:
-    return _no_cache(FileResponse(STATIC_DIR / "sales.html"))
-
-
-@app.get("/sales.js", tags=["meta"], include_in_schema=False)
-def sales_script() -> Response:
-    return _no_cache(FileResponse(STATIC_DIR / "sales.js", media_type="application/javascript"))
-
-
-@app.get("/sales.css", tags=["meta"], include_in_schema=False)
-def sales_style() -> Response:
-    return _no_cache(FileResponse(STATIC_DIR / "sales.css", media_type="text/css"))
 
 
 @app.get("/map", tags=["meta"], include_in_schema=False, response_class=HTMLResponse)
@@ -344,5 +319,6 @@ def healthz() -> dict[str, str]:
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=APP_PORT, reload=False)
+
 
 

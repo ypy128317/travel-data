@@ -5,7 +5,7 @@
 <!-- 部署方式：GitHub Actions CI/CD（git push 到 main 自动上线） -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#0d1428">
-<title>云游旅行 · 业务数据中台</title>
+<title>云游亲子 · AI 亲子旅行规划</title>
 <style>
   :root{
     --primary:#4f46e5; --primary2:#7c3aed; --bg:#f6f8fc; --card:#fff;
@@ -333,7 +333,7 @@
 </head>
 <body>
 <header><div class="wrap">
-  <div class="brand"><span class="brand-mark"></span>云游旅行 <small>业务数据中台 · v0.1</small></div>
+  <div class="brand"><span class="brand-mark"></span>云游亲子 <small>AI 亲子旅行规划 · v1.0</small></div>
   <nav>
     <button class="active" data-panel="ai">AI 行程助手</button>
     <button data-panel="map">线路地图</button>
@@ -343,8 +343,6 @@
     <button data-panel="guides">真人导游</button>
     <button data-panel="member">会员中心</button>
     <button data-panel="refund">售后退款</button>
-    <button data-panel="console">接口控制台</button>
-    <button data-panel="overview">数据概览</button>
   </nav>
   <div class="flow" id="flow">
     <div class="flow-step" data-fs="search"><span class="dot">1</span><span>选商品</span></div>
@@ -362,20 +360,20 @@
 <!-- ========== AI 行程助手 ========== -->
 <section class="panel active" id="panel-ai">
   <div class="hero" style="--glow:245,158,11">
-    <h1>AI 智能行程助手 <span class="api-tag">通义千问 qwen-flash</span></h1>
-    <p>输入目的地、天数与偏好，AI 会结合<strong>平台真实商品</strong> + <strong>旅游知识库攻略</strong>，生成可落地、带出处、可直接下单的旅行行程。带知识标记的城市有攻略加持。</p>
+    <h1>亲子游 AI 规划 <span class="api-tag">通义千问 qwen-flash</span></h1>
+    <p>带娃旅行，先让 AI 排一遍。输入孩子年龄、目的地和节奏，AI 会结合<strong>真实酒店/门票</strong> + <strong>亲子攻略</strong>，安排午休、室内备选和亲子友好住宿，生成可直接下单的行程。</p>
   </div>
   <div class="card agent-card">
-    <h2>✦ 一句话智能规划 <span class="api-tag" style="background:#ede9fe;color:#6d28d9">AI Agent</span></h2>
-    <p class="desc">用一句话说出你的需求，AI 助手自动完成：识别城市 → 规划行程 → 匹配真实航班与商品 → 计算花费 → 生成地图 → 导出海报，全流程无人参与。</p>
+    <h2>✦ 一句话规划亲子行程 <span class="api-tag" style="background:#ede9fe;color:#6d28d9">亲子 Agent</span></h2>
+    <p class="desc">直接说“带 5 岁孩子去成都玩 3 天，不要太赶”，AI 自动完成：识别需求 → 安排亲子节奏 → 匹配真实酒店/门票 → 计算花费 → 生成地图 → 导出海报。</p>
     <div class="agent-input-row">
-      <input id="agent-query" placeholder="例如：下周末去三亚玩3天，预算5000，想吃海鲜住海边" onkeydown="if(event.key==='Enter')agentPlan()">
-      <button class="btn btn-ai" id="btn-agent" onclick="agentPlan()">✦ 交给 AI 全自动规划</button>
+      <input id="agent-query" placeholder="例如：带5岁孩子去成都玩3天，预算3000，不想太赶，住亲子酒店" onkeydown="if(event.key==='Enter')agentPlan()">
+      <button class="btn btn-ai" id="btn-agent" onclick="agentPlan()">✦ 交给 AI 规划亲子行程</button>
     </div>
     <div class="agent-quick">
-      <span onclick="document.getElementById('agent-query').value='去三亚玩3天，预算5000，想吃海鲜住海边';agentPlan()">三亚 · 海岛度假</span>
-      <span onclick="document.getElementById('agent-query').value='成都4天，预算4000，喜欢历史文化和小吃';agentPlan()">成都 · 美食文化</span>
-      <span onclick="document.getElementById('agent-query').value='厦门2天，预算3000，想看海拍照';agentPlan()">厦门 · 海边拍照</span>
+      <span onclick="document.getElementById('agent-query').value='带5岁孩子去成都玩3天，预算3000，不想太赶，住亲子酒店';agentPlan()">成都 · 5岁亲子</span>
+      <span onclick="document.getElementById('agent-query').value='带3岁孩子去三亚玩4天，预算5000，想住海边，安排午休';agentPlan()">三亚 · 海边亲子</span>
+      <span onclick="document.getElementById('agent-query').value='带8岁孩子去厦门玩3天，预算4000，想拍照和逛博物馆';agentPlan()">厦门 · 学龄亲子</span>
     </div>
     <div id="agent-steps" class="agent-steps"></div>
   </div>
@@ -396,8 +394,19 @@
         <option value="1">1 天</option><option value="2">2 天</option><option value="3" selected>3 天</option>
         <option value="4">4 天</option><option value="5">5 天</option>
       </select></div>
-      <div class="field"><label>预算（元）</label><input id="ai-budget" type="number" value="2000"></div>
-      <div class="field"><label>旅行偏好</label><input id="ai-pref" value="历史文化、美食" placeholder="如：亲子、自然风光、购物"></div>
+      <div class="field"><label>孩子年龄</label><select id="ai-child">
+        <option value="0-3">0–3 岁 · 婴儿/幼儿</option>
+        <option value="4-6" selected>4–6 岁 · 学龄前</option>
+        <option value="7-12">7–12 岁 · 小学生</option>
+        <option value="13+">13 岁以上</option>
+      </select></div>
+      <div class="field"><label>出行节奏</label><select id="ai-pace">
+        <option value="轻松" selected>轻松 · 留午休</option>
+        <option value="适中">适中 · 每天 2 个点</option>
+        <option value="充实">充实 · 多安排</option>
+      </select></div>
+      <div class="field"><label>预算（元）</label><input id="ai-budget" type="number" value="3000"></div>
+      <div class="field"><label>亲子偏好</label><input id="ai-pref" value="亲子、节奏轻松、室内备选" placeholder="如：亲子酒店、博物馆、海边"></div>
     </div>
     <div class="actions">
       <button class="btn btn-ai" id="btn-ai-plan">生成我的行程</button>

@@ -1,6 +1,6 @@
-# 旅游平台业务数据
+# 云游亲子 · AI 亲子旅行规划
 ## 业务概述
-旅游平台面向用户提供一站式出行产品，覆盖出行前搜索比价、商品详情查看、库存价格确认、下单支付、行程管理和售后退款等完整业务流程。
+面向带娃家庭的垂直旅行规划产品：家长自己描述需求，AI 结合真实酒店/门票/攻略生成节奏合理的亲子行程，支持多轮调整、下单支付和售后。
 
 平台覆盖的出行产品：
 
@@ -48,80 +48,40 @@ uv run -m app.main  # 启动服务
 - Swagger UI：`http://127.0.0.1:8000/docs`
 - OpenAPI JSON：`http://127.0.0.1:8000/openapi.json`
 
-## C 端 AI 规划 + 可选人工顾问
+## 亲子游 AI 规划（C 端主产品）
 
-C 端主路径保持“游客自己用 AI”：
+这是一个面向**带娃家庭**的垂直旅行规划产品，不包含销售工作台或机构报价后台。
 
-```text
-游客描述需求
-→ AI 生成行程
-→ 自己改行程 / 自己下单
-```
-
-AI 行程结果里提供「找真人顾问」入口，但默认不强制：
+主路径：
 
 ```text
-游客主动提交找顾问
-→ 写入 quote_inquiries
-→ 销售工作台「客户询价」出现线索
-→ 销售点击线索，带出客户信息和 AI 行程，改价、发报价
+家长描述需求
+→ 选择孩子年龄 / 出行节奏
+→ AI 生成亲子行程
+→ 对话式调整
+→ 自己下单 / 支付
 ```
 
-API：
+亲子约束：
 
-- `POST /api/inquiries`：游客提交找顾问需求
-- `GET /api/inquiries`：销售查看询价线索（需要 `X-User-Id`）
-- `POST /api/inquiries/{id}/claim`：销售标记已联系
+- 每天最多 2 个主要景点
+- 午后留休息
+- 避免长时间暴走、爬山和深夜行程
+- 优先亲子酒店、母婴设施、推车可达
+- 雨天把户外替换为室内备选
 
-## 销售工作台（AI 报价闭环）
+核心接口：
 
-销售工作台是独立入口，不放在游客主导航里：
-
-- 工作台：`http://127.0.0.1:8000/sales`
-- 客户报价页：`/quote/{token}`
-
-流程：
-
-```text
-客户询价
-→ Qwen 生成逐日行程草稿
-→ 销售调整基础成本/加价
-→ 生成带有效期的报价单
-→ 复制客户专属链接
-→ 客户打开并确认
-→ 自动生成 pending_payment 订单并锁定报价
-→ 客户模拟支付
-→ 通知销售与供应商，供应商确认接单
-```
-
-![销售工作台](screenshots/sales-workbench.png)
-
-![客户报价页](screenshots/customer-quote.png)
-
-报价单写入 `quotes` 表；表会在应用启动时自动创建，也可手动执行 [`sql/quotes.sql`](./sql/quotes.sql)。客户确认时，服务端在同一个事务里创建 `travel_package` 订单和明细，把最终报价锁进订单，状态为 `pending_payment`。
-
-客户支付走报价单 token 接口，演示支付成功后会写入 `quote_events`，通知销售和供应商；销售端出现「供应商确认」按钮，确认后报价进入履约准备。真实支付只需把演示回调替换为渠道回调。
-
-API：
-
-- `POST /api/quotes`：创建报价单（需要 `X-User-Id`）
-- `GET /api/quotes`：销售报价列表（需要 `X-User-Id`）
-- `GET /api/quotes/{token}`：客户查看（公开）
-- `PATCH /api/quotes/{token}`：销售改价（需要 `X-User-Id`）
-- `POST /api/quotes/{token}/confirm`：客户确认并生成待支付订单（公开）
-- `POST /api/quotes/{token}/pay`：客户发起支付（公开，token 鉴权）
-- `POST /api/quotes/{token}/pay/confirm`：演示支付成功回调（公开，token 鉴权）
-- `POST /api/quotes/{token}/supplier-confirm`：供应商确认接单（需要 `X-User-Id`）
+- `POST /api/ai/plan`：生成亲子行程
+- `POST /api/ai/refine`：多轮调整
+- `POST /api/ai/guide`：AI 随行讲解
+- `POST /api/ai/chat`：商品/攻略问答
 
 本地验证：
 
 ```bash
-uv run -m pytest tests/test_quotes.py -q
-node tests/sales_smoke.mjs
-node tests/concierge_smoke.mjs
+node tests/consumer_smoke.mjs
 ```
-
-`sales_smoke.mjs` 会真实调用 Qwen 生成行程、创建报价单、打开客户链接并确认。
 
 
 ## 数据定义

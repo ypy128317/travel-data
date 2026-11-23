@@ -1,4 +1,4 @@
-/* C 端 AI 行程 → 找顾问 → 销售工作台线索 */
+/* 亲子游 C 端主路径：首页 → 亲子参数 → AI 行程 */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
-const PORT = 9343
-const PROFILE = path.join(ROOT, '..', '.edge-concierge-smoke')
+const PORT = 9345
+const PROFILE = path.join(ROOT, '..', '.edge-consumer-smoke')
 const BASE = process.env.APP_URL || 'http://127.0.0.1:8000/'
 const wait = (ms) => new Promise(r => setTimeout(r, ms))
 if (fs.existsSync(PROFILE)) fs.rmSync(PROFILE, { recursive: true, force: true })
@@ -50,36 +50,24 @@ const screenshot = async (name) => {
   fs.mkdirSync(path.join(ROOT, 'screenshots'), { recursive: true })
   fs.writeFileSync(path.join(ROOT, 'screenshots', `${name}.png`), Buffer.from(shot.data, 'base64'))
 }
-const setInput = async (selector, value) => {
-  await evaluate(`(() => { const e=document.querySelector(${JSON.stringify(selector)}); e.value=${JSON.stringify(value)}; e.dispatchEvent(new Event('input',{bubbles:true})); return true })()`)
-  await wait(180)
-}
 await send('Runtime.enable')
 await wait(1200)
-await waitFor(() => evaluate("document.readyState==='complete' && !!document.querySelector('#agent-query')"), 12000, 'consumer home')
-check('游客首页默认是 AI 规划', await evaluate("!!document.querySelector('#btn-agent') && document.body.innerText.includes('AI 行程助手')"))
-check('游客导航不出现销售工作台', await evaluate("![...document.querySelectorAll('nav a')].some(a=>a.textContent.includes('销售工作台'))"))
+await waitFor(() => evaluate("document.readyState==='complete' && !!document.querySelector('#agent-query')"), 12000, 'home')
+check('首页是亲子 AI 规划', await evaluate("document.body.innerText.includes('亲子游 AI 规划') && document.title.includes('亲子')"))
+check('游客端没有销售工作台', await evaluate("!document.body.innerText.includes('销售工作台')"))
+check('提供孩子年龄和节奏', await evaluate("!!document.getElementById('ai-child') && !!document.getElementById('ai-pace')"))
 
-await setInput('#agent-query', '下周末去成都玩3天，预算3000，亲子，不想太赶')
-await evaluate("document.getElementById('btn-agent').click(); true")
-await waitFor(() => evaluate("!!document.querySelector('#concierge-box') && !!document.querySelector('.ai-day')"), 60000, 'AI plan')
-check('AI 行程生成并出现找顾问入口', await evaluate("document.body.innerText.includes('找真人顾问')"))
-
-await evaluate("[...document.querySelectorAll('#ai-result button')].find(b=>b.textContent.includes('找真人顾问')).click(); true")
-await setInput('#concierge-name', '王女士')
-await setInput('#concierge-phone', '13800000000')
-await evaluate("[...document.querySelectorAll('#concierge-box button')].find(b=>b.textContent.includes('提交给顾问')).click(); true")
-await waitFor(() => evaluate("document.getElementById('concierge-status').textContent.includes('已提交给顾问')"), 15000, 'inquiry submitted')
-check('游客主动提交询价成功', true)
-await screenshot('consumer-concierge')
-
-await send('Page.navigate', { url: 'http://127.0.0.1:8000/sales' })
-await waitFor(() => evaluate("!!document.querySelector('.inquiry-item')"), 10000, 'sales inquiry')
-check('销售工作台收到询价线索', await evaluate("document.querySelector('.inquiry-item').innerText.includes('王女士')"))
-await evaluate("document.querySelector('.inquiry-item').click(); true")
-await waitFor(() => evaluate("document.getElementById('customer-name').value === '王女士' && !!document.querySelector('.day')"), 10000, 'inquiry applied')
-check('点击线索带出行程与客户信息', true)
-await screenshot('sales-inquiry')
+await evaluate(`(() => {
+  const q=document.getElementById('agent-query');
+  q.value='带5岁孩子去成都玩3天，预算3000，不想太赶，住亲子酒店';
+  q.dispatchEvent(new Event('input',{bubbles:true}));
+  document.getElementById('btn-agent').click();
+  return true;
+})()`)
+await waitFor(() => evaluate("!!document.querySelector('.ai-day')"), 60000, 'AI plan')
+check('亲子 AI 行程生成', await evaluate("document.querySelectorAll('.ai-day').length >= 2"))
+check('结果不再出现找顾问入口', await evaluate("!document.body.innerText.includes('找真人顾问')"))
+await screenshot('consumer-home')
 check('无未捕获 JavaScript 异常', exceptions.length === 0, exceptions.join(' | '))
-console.log('\nCONCIERGE SMOKE OK · 6 checks')
+console.log('\nCONSUMER SMOKE OK · 6 checks')
 ws.close(); edge.kill(); process.exit(0)
