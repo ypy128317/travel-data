@@ -15,8 +15,8 @@ from .database import fetch_all, fetch_one
 from .routers import ai, guides, orders, products, refunds, users
 
 app = FastAPI(
-    title="云游亲子 · AI 亲子旅行规划 API",
-    description="面向带娃家庭的 AI 行程规划、商品查询、下单、支付与售后接口。",
+    title="云游旅行 · AI 旅行规划 API",
+    description="面向游客的 AI 行程规划、商品查询、下单、支付与售后接口。",
     version="0.1.0",
 )
 

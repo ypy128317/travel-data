@@ -913,11 +913,6 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 
 /* ===== AI Agent 一句话全自动编排 ===== */
 let agentBusy=false;
-function familyPref(){
-  const child=document.getElementById('ai-child')?.value||'4-6';
-  const pace=document.getElementById('ai-pace')?.value||'轻松';
-  return `亲子游；孩子${child}岁；节奏${pace}；优先亲子酒店、午休和室内备选`;
-}
 async function agentPlan(){
   if(agentBusy)return;
   const q=document.getElementById('agent-query')?.value.trim();
@@ -943,7 +938,7 @@ async function agentPlan(){
     // 步骤2：生成行程（复用真实 AI 接口）
     renderAgentSteps('doing','plan');
     const areaId=KB_AREA[info.city]||info.areaId||2;
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:[info.pref,familyPref()].filter(Boolean).join('；')}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:info.pref}});
     if(!r.ok){renderAgentSteps('done');toast('行程生成失败，请重试');return;}
     window.__planChat=[];
     applyPlanContext(r.data);
@@ -1100,7 +1095,7 @@ async function aiGeneratePlan(){
   box.innerHTML=`<div class="card"><div class="loading"><span class="spin"></span>AI 正在结合${isKb?'平台商品 + 旅游攻略知识':'平台真实商品'}规划行程… 已等待 <b id="ai-elapsed" style="color:var(--primary)">0</b> 秒</div><div class="note" style="margin-top:8px">首次生成约需 8-15 秒，请耐心等待，生成期间按钮已锁定，无需重复点击。</div></div>`;
   aiPlanTimer=setInterval(()=>{const el=document.getElementById('ai-elapsed');if(el)el.textContent=Math.round((Date.now()-t0)/1000);},1000);
   try{
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:[pref,familyPref()].filter(Boolean).join('；')}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:pref}});
     if(!r.ok){box.innerHTML=`<div class="card"><div class="empty">生成失败：${esc(JSON.stringify(r.data))}</div></div>`;return}
     window.__planChat=[];   // 新行程：清空微调对话历史
     applyPlanContext(r.data);

@@ -1,4 +1,4 @@
-/* 亲子游 C 端主路径：首页 → 亲子参数 → AI 行程 */
+/* C 端主路径：首页 → AI 行程 */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -53,19 +53,19 @@ const screenshot = async (name) => {
 await send('Runtime.enable')
 await wait(1200)
 await waitFor(() => evaluate("document.readyState==='complete' && !!document.querySelector('#agent-query')"), 12000, 'home')
-check('首页是亲子 AI 规划', await evaluate("document.body.innerText.includes('亲子游 AI 规划') && document.title.includes('亲子')"))
+check('首页是 AI 旅行规划', await evaluate("document.body.innerText.includes('AI 智能行程助手') && document.title.includes('AI 旅行规划')"))
 check('游客端没有销售工作台', await evaluate("!document.body.innerText.includes('销售工作台')"))
-check('提供孩子年龄和节奏', await evaluate("!!document.getElementById('ai-child') && !!document.getElementById('ai-pace')"))
+check('提供目的地/天数/预算/偏好', await evaluate("!!document.getElementById('ai-days') && !!document.getElementById('ai-budget') && !!document.getElementById('ai-pref')"))
 
 await evaluate(`(() => {
   const q=document.getElementById('agent-query');
-  q.value='带5岁孩子去成都玩3天，预算3000，不想太赶，住亲子酒店';
+  q.value='去成都玩3天，预算3000，喜欢美食和历史，不想太赶';
   q.dispatchEvent(new Event('input',{bubbles:true}));
   document.getElementById('btn-agent').click();
   return true;
 })()`)
 await waitFor(() => evaluate("!!document.querySelector('.ai-day')"), 60000, 'AI plan')
-check('亲子 AI 行程生成', await evaluate("document.querySelectorAll('.ai-day').length >= 2"))
+check('AI 行程生成', await evaluate("document.querySelectorAll('.ai-day').length >= 2"))
 check('结果不再出现找顾问入口', await evaluate("!document.body.innerText.includes('找真人顾问')"))
 await screenshot('consumer-home')
 check('无未捕获 JavaScript 异常', exceptions.length === 0, exceptions.join(' | '))
