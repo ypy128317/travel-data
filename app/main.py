@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .config import APP_PORT, TMAP_KEY
 from .database import fetch_all, fetch_one
-from .routers import ai, guides, orders, products, refunds, users
+from .routers import ai, guides, orders, products, quotes, refunds, users
 
 app = FastAPI(
     title="旅游平台业务数据 API",
@@ -26,6 +26,12 @@ app.include_router(orders.router)
 app.include_router(refunds.router)
 app.include_router(ai.router)
 app.include_router(guides.router)
+app.include_router(quotes.router)
+
+
+@app.on_event("startup")
+def ensure_quote_table() -> None:
+    quotes.ensure_table()
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -51,6 +57,26 @@ def app_page() -> Response:
 @app.get("/app.js", tags=["meta"], include_in_schema=False)
 def app_script() -> Response:
     return _no_cache(FileResponse(STATIC_DIR / "app.js", media_type="application/javascript"))
+
+
+@app.get("/sales", tags=["meta"], include_in_schema=False)
+def sales_page() -> Response:
+    return _no_cache(FileResponse(STATIC_DIR / "sales.html"))
+
+
+@app.get("/quote/{token}", tags=["meta"], include_in_schema=False)
+def quote_page(token: str) -> Response:
+    return _no_cache(FileResponse(STATIC_DIR / "sales.html"))
+
+
+@app.get("/sales.js", tags=["meta"], include_in_schema=False)
+def sales_script() -> Response:
+    return _no_cache(FileResponse(STATIC_DIR / "sales.js", media_type="application/javascript"))
+
+
+@app.get("/sales.css", tags=["meta"], include_in_schema=False)
+def sales_style() -> Response:
+    return _no_cache(FileResponse(STATIC_DIR / "sales.css", media_type="text/css"))
 
 
 @app.get("/map", tags=["meta"], include_in_schema=False, response_class=HTMLResponse)
@@ -316,3 +342,4 @@ def healthz() -> dict[str, str]:
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=APP_PORT, reload=False)
+

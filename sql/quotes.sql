@@ -1,0 +1,45 @@
+-- 销售工作台：AI 行程报价单
+CREATE TABLE IF NOT EXISTS quotes (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    quote_no VARCHAR(40) NOT NULL,
+    token VARCHAR(80) NOT NULL,
+    user_id INT NOT NULL,
+    customer_name VARCHAR(80) NOT NULL,
+    customer_phone VARCHAR(40) NOT NULL DEFAULT '',
+    city VARCHAR(80) NOT NULL,
+    days INT NOT NULL,
+    budget DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    base_cost DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    markup_amount DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    final_price DECIMAL(12, 2) NOT NULL DEFAULT 0,
+    valid_hours INT NOT NULL DEFAULT 48,
+    status VARCHAR(20) NOT NULL DEFAULT 'sent',
+    plan_json LONGTEXT NOT NULL,
+    notes VARCHAR(500) NOT NULL DEFAULT '',
+    created_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    confirmed_at DATETIME NULL,
+    order_id BIGINT UNSIGNED NULL,
+    order_no VARCHAR(50) NULL,
+    paid_at DATETIME NULL,
+    payment_no VARCHAR(50) NULL,
+    supplier_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    supplier_confirmed_at DATETIME NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_quotes_no (quote_no),
+    UNIQUE KEY uk_quotes_token (token),
+    KEY idx_quotes_user (user_id),
+    KEY idx_quotes_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS quote_events (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    quote_id BIGINT UNSIGNED NOT NULL,
+    event_type VARCHAR(40) NOT NULL,
+    actor VARCHAR(30) NOT NULL,
+    message VARCHAR(500) NOT NULL,
+    created_at DATETIME NOT NULL,
+    PRIMARY KEY (id),
+    KEY idx_quote_events_quote (quote_id),
+    CONSTRAINT fk_quote_events_quote FOREIGN KEY (quote_id) REFERENCES quotes (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

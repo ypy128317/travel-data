@@ -48,6 +48,56 @@ uv run -m app.main  # 启动服务
 - Swagger UI：`http://127.0.0.1:8000/docs`
 - OpenAPI JSON：`http://127.0.0.1:8000/openapi.json`
 
+## 销售工作台（AI 报价闭环）
+
+在原有 C 端网站增加了面向旅行社/文旅机构的销售工作台：
+
+- 工作台：`http://127.0.0.1:8000/sales`
+- 客户报价页：`/quote/{token}`
+
+流程：
+
+```text
+客户询价
+→ Qwen 生成逐日行程草稿
+→ 销售调整基础成本/加价
+→ 生成带有效期的报价单
+→ 复制客户专属链接
+→ 客户打开并确认
+→ 自动生成 pending_payment 订单并锁定报价
+→ 客户模拟支付
+→ 通知销售与供应商，供应商确认接单
+```
+
+![销售工作台](screenshots/sales-workbench.png)
+
+![客户报价页](screenshots/customer-quote.png)
+
+报价单写入 `quotes` 表；表会在应用启动时自动创建，也可手动执行 [`sql/quotes.sql`](./sql/quotes.sql)。客户确认时，服务端在同一个事务里创建 `travel_package` 订单和明细，把最终报价锁进订单，状态为 `pending_payment`。
+
+客户支付走报价单 token 接口，演示支付成功后会写入 `quote_events`，通知销售和供应商；销售端出现「供应商确认」按钮，确认后报价进入履约准备。真实支付只需把演示回调替换为渠道回调。
+
+API：
+
+- `POST /api/quotes`：创建报价单（需要 `X-User-Id`）
+- `GET /api/quotes`：销售报价列表（需要 `X-User-Id`）
+- `GET /api/quotes/{token}`：客户查看（公开）
+- `PATCH /api/quotes/{token}`：销售改价（需要 `X-User-Id`）
+- `POST /api/quotes/{token}/confirm`：客户确认并生成待支付订单（公开）
+- `POST /api/quotes/{token}/pay`：客户发起支付（公开，token 鉴权）
+- `POST /api/quotes/{token}/pay/confirm`：演示支付成功回调（公开，token 鉴权）
+- `POST /api/quotes/{token}/supplier-confirm`：供应商确认接单（需要 `X-User-Id`）
+
+本地验证：
+
+```bash
+uv run -m pytest tests/test_quotes.py -q
+node tests/sales_smoke.mjs
+```
+
+`sales_smoke.mjs` 会真实调用 Qwen 生成行程、创建报价单、打开客户链接并确认。
+
+
 ## 数据定义
 ### 基础维度
 表说明：
