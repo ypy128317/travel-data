@@ -182,6 +182,51 @@ async function loadHistory() {
   }
 }
 
+async function loadInquiries() {
+  try {
+    const data = await api('/api/inquiries');
+    const list = $('inquiry-list');
+    const count = $('inquiry-count');
+    if (count) count.textContent = String(data.items?.length || 0);
+    if (!data.items?.length) { list.innerHTML = '<div class="muted">暂无询价</div>'; return; }
+    list.innerHTML = data.items.map((q) => `<div class="quote-item inquiry-item" data-inquiry="${q.id}">
+      <div class="quote-item-top"><b>${esc(q.customerName)} · ${esc(q.city)}</b><span class="pill ${q.status === 'contacted' ? 'confirmed' : ''}">${esc(q.statusLabel)}</span></div>
+      <small>${esc(q.days)} 天 · 预算 ${fmt(q.budget)} · ${esc(q.createdAt || '')}</small>
+    </div>`).join('');
+    list.querySelectorAll('.inquiry-item').forEach((el) => {
+      el.onclick = () => applyInquiry(data.items.find((x) => String(x.id) === el.dataset.inquiry));
+    });
+  } catch (e) {
+    $('inquiry-list').innerHTML = `<div class="muted">${esc(e.message)}</div>`;
+  }
+}
+
+async function applyInquiry(inq) {
+  if (!inq) return;
+  $('customer-name').value = inq.customerName || '';
+  $('customer-phone').value = inq.customerPhone || '';
+  $('budget').value = inq.budget || 0;
+  $('preferences').value = inq.preferences || '';
+  $('days').value = String(inq.days || 3);
+  const cityOption = [...$('city').options].find((o) => (o.dataset.name || o.textContent) === inq.city);
+  if (cityOption) $('city').value = cityOption.value;
+  if (inq.plan) {
+    currentPlan = inq.plan;
+    $('plan-empty').classList.add('hidden');
+    $('plan-content').classList.remove('hidden');
+    $('plan-title').textContent = `${inq.city} · ${inq.days} 天 AI 行程草稿`;
+    $('plan-summary').textContent = inq.plan.summary || '来自游客 AI 行程的草稿。';
+    renderPlan(inq.plan, $('plan-days'));
+    const base = Number(inq.plan.estimated_cost || 0);
+    $('base-cost').value = base.toFixed(2);
+    $('markup').value = Math.round(base * 0.1 * 100) / 100;
+    recalcPrice();
+  }
+  setStatus('generate-status', `已载入 ${inq.customerName} 的询价；可改价后生成报价单。`, 'ok');
+  try { await api(`/api/inquiries/${inq.id}/claim`, { method: 'POST' }); loadInquiries(); } catch { /* non-blocking */ }
+  $('plan-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 async function supplierConfirm(token) {
   try {
     await api(`/api/quotes/${encodeURIComponent(token)}/supplier-confirm`, { method: 'POST' });
@@ -199,6 +244,7 @@ function initSales() {
   $('base-cost').oninput = recalcPrice;
   $('markup').oninput = recalcPrice;
   loadHistory();
+  loadInquiries();
 }
 
 /* ==================== 客户报价页 ==================== */

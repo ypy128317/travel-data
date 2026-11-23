@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .config import APP_PORT, TMAP_KEY
 from .database import fetch_all, fetch_one
-from .routers import ai, guides, orders, products, quotes, refunds, users
+from .routers import ai, guides, inquiries, orders, products, quotes, refunds, users
 
 app = FastAPI(
     title="旅游平台业务数据 API",
@@ -27,11 +27,13 @@ app.include_router(refunds.router)
 app.include_router(ai.router)
 app.include_router(guides.router)
 app.include_router(quotes.router)
+app.include_router(inquiries.router)
 
 
 @app.on_event("startup")
 def ensure_quote_table() -> None:
     quotes.ensure_table()
+    inquiries.ensure_table()
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -342,4 +344,5 @@ def healthz() -> dict[str, str]:
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=APP_PORT, reload=False)
+
 

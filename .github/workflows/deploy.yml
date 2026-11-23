@@ -81,4 +81,5 @@ jobs:
           curl -fsS -o /dev/null -w '前端 JS   HTTP %{http_code}\n' http://127.0.0.1/app.js
           curl -fsS -o /dev/null -w '地图页    HTTP %{http_code}\n' http://127.0.0.1/map
           curl -fsS -o /dev/null -w '城市接口  HTTP %{http_code}\n' http://127.0.0.1/api/meta/cities
+          curl -fsS -o /dev/null -w '销售工作台 HTTP %{http_code}\n' http://127.0.0.1/sales
           echo "=== 部署完成：http://101.37.234.52 ==="

@@ -48,9 +48,34 @@ uv run -m app.main  # 启动服务
 - Swagger UI：`http://127.0.0.1:8000/docs`
 - OpenAPI JSON：`http://127.0.0.1:8000/openapi.json`
 
+## C 端 AI 规划 + 可选人工顾问
+
+C 端主路径保持“游客自己用 AI”：
+
+```text
+游客描述需求
+→ AI 生成行程
+→ 自己改行程 / 自己下单
+```
+
+AI 行程结果里提供「找真人顾问」入口，但默认不强制：
+
+```text
+游客主动提交找顾问
+→ 写入 quote_inquiries
+→ 销售工作台「客户询价」出现线索
+→ 销售点击线索，带出客户信息和 AI 行程，改价、发报价
+```
+
+API：
+
+- `POST /api/inquiries`：游客提交找顾问需求
+- `GET /api/inquiries`：销售查看询价线索（需要 `X-User-Id`）
+- `POST /api/inquiries/{id}/claim`：销售标记已联系
+
 ## 销售工作台（AI 报价闭环）
 
-在原有 C 端网站增加了面向旅行社/文旅机构的销售工作台：
+销售工作台是独立入口，不放在游客主导航里：
 
 - 工作台：`http://127.0.0.1:8000/sales`
 - 客户报价页：`/quote/{token}`
@@ -93,6 +118,7 @@ API：
 ```bash
 uv run -m pytest tests/test_quotes.py -q
 node tests/sales_smoke.mjs
+node tests/concierge_smoke.mjs
 ```
 
 `sales_smoke.mjs` 会真实调用 Qwen 生成行程、创建报价单、打开客户链接并确认。
