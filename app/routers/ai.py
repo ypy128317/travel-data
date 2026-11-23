@@ -63,6 +63,150 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+# ==================== 实时天气注入（工具调用 / MCP 思路） ====================
+# 免费公开天气 API（无需 Key）。国内服务器访问 api.open-meteo.com 常超时，
+# 因此优先用 wttr.in（国内稳定、中文城市名直接可用），Open-Meteo 作为备选。
+# 任何失败都静默降级为空，绝不让天气查询拖垮主行程生成流程。
+
+# wttr.in 天气描述(英文) → 中文；值里含 rain/snow/storm 等关键词的视为恶劣天气
+_BAD_WORDS = ("rain", "drizzle", "shower", "thunder", "storm", "snow", "sleet", "hail", "fog", "mist")
+_WX_ZH = [
+    ("sunny", "晴"), ("clear", "晴"), ("partly cloudy", "多云"),
+    ("cloudy", "阴"), ("overcast", "阴"), ("patchy rain", "局部有雨"),
+    ("light rain", "小雨"), ("moderate rain", "中雨"), ("heavy rain", "大雨"),
+    ("rain", "有雨"), ("drizzle", "毛毛雨"), ("shower", "阵雨"),
+    ("thunder", "雷阵雨"), ("snow", "有雪"), ("fog", "有雾"), ("mist", "薄雾"),
+]
+
+
+def _wx_zh(desc: str) -> tuple[str, bool]:
+    d = (desc or "").strip()
+    low = d.lower()
+    bad = any(w in low for w in _BAD_WORDS)
+    zh = d
+    for key, val in _WX_ZH:
+        if key in low:
+            zh = val
+            break
+    return zh, bad
+
+
+async def _fetch_wttr(city: str, days: int) -> dict[str, Any] | None:
+    """主数据源：wttr.in，中文城市名直接可用。"""
+    try:
+        async with httpx.AsyncClient(timeout=9) as client:
+            r = await client.get(
+                f"https://wttr.in/{city}",
+                params={"format": "j1", "lang": "zh"},
+            )
+            r.raise_for_status()
+            data = r.json() or {}
+            weather = data.get("weather") or []
+            if not weather:
+                return None
+            out_days = []
+            for day in weather[: max(1, min(int(days), 7))]:
+                hourly = day.get("hourly") or []
+                # 取当天出现过的天气描述，挑第一个恶劣天气作为代表
+                bad_desc = None
+                any_desc = None
+                for h in hourly:
+                    dd = ((h.get("weatherDesc") or [{}])[0].get("value") or "").strip()
+                    if not dd:
+                        continue
+                    any_desc = any_desc or dd
+                    _, bad = _wx_zh(dd)
+                    if bad and not bad_desc:
+                        bad_desc = dd
+                raw = bad_desc or any_desc or "晴"
+                zh, bad = _wx_zh(raw)
+                tmin = day.get("mintempC")
+                tmax = day.get("maxtempC")
+                out_days.append({
+                    "date": day.get("date"), "desc": zh, "bad": bad,
+                    "tempMax": int(float(tmax)) if tmax not in (None, "") else None,
+                    "tempMin": int(float(tmin)) if tmin not in (None, "") else None,
+                })
+            if not out_days:
+                return None
+            bad_days = [d["date"] for d in out_days if d["bad"]]
+            return {
+                "ok": True, "city": city, "source": "wttr.in 实时天气 API",
+                "days": out_days, "badDays": bad_days,
+            }
+    except Exception:
+        return None
+
+
+async def _fetch_weather(city: str, days: int) -> dict[str, Any] | None:
+    """拉取目的地逐日天气：wttr.in 优先，Open-Meteo 备选；失败返回 None。"""
+    if not city:
+        return None
+    wx = await _fetch_wttr(city, days)
+    if wx:
+        return wx
+    # 备选：Open-Meteo（部分网络环境可达）
+    try:
+        async with httpx.AsyncClient(timeout=6) as client:
+            geo = await client.get(
+                "https://geocoding-api.open-meteo.com/v1/search",
+                params={"name": city, "count": 1, "language": "zh", "format": "json"},
+            )
+            geo.raise_for_status()
+            results = (geo.json() or {}).get("results") or []
+            if not results:
+                return None
+            lat, lon = results[0]["latitude"], results[0]["longitude"]
+            fc = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": lat, "longitude": lon,
+                    "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+                    "timezone": "Asia/Shanghai", "forecast_days": max(1, min(int(days), 7)),
+                },
+            )
+            fc.raise_for_status()
+            daily = (fc.json() or {}).get("daily") or {}
+            times = daily.get("time") or []
+            codes = daily.get("weather_code") or []
+            tmaxs = daily.get("temperature_2m_max") or []
+            tmins = daily.get("temperature_2m_min") or []
+            out_days = []
+            for i, t in enumerate(times):
+                code = int(codes[i]) if i < len(codes) else 0
+                desc = "有雨/雪" if code >= 51 else ("阴" if code == 3 else "晴")
+                bad = code >= 45
+                out_days.append({
+                    "date": t, "desc": desc, "bad": bad,
+                    "tempMax": round(tmaxs[i]) if i < len(tmaxs) and tmaxs[i] is not None else None,
+                    "tempMin": round(tmins[i]) if i < len(tmins) and tmins[i] is not None else None,
+                })
+            if not out_days:
+                return None
+            return {
+                "ok": True, "city": city, "source": "Open-Meteo 实时天气 API",
+                "days": out_days, "badDays": [d["date"] for d in out_days if d["bad"]],
+            }
+    except Exception:
+        return None
+
+
+def _weather_prompt(weather: dict[str, Any] | None) -> str:
+    """把天气数据转成注入 prompt 的指令文本。"""
+    if not weather or not weather.get("days"):
+        return ""
+    lines = [f"{d['date']} {d['desc']}" + (f" {d['tempMin']}~{d['tempMax']}℃" if d.get("tempMax") is not None else "") for d in weather["days"]]
+    bad = weather.get("badDays") or []
+    s = "【实时天气数据（工具调用获取，非静态知识库）】\n" + "\n".join(lines) + "\n"
+    if bad:
+        s += ("注意：以下日期有降雨/降雪/雾/雷暴等天气：" + "、".join(bad) +
+              "。请把这些天的【户外景点】替换为【室内备选】（博物馆、美术馆、室内展馆、商圈、温泉、影院等），"
+              "并在对应安排和小贴士里说明是因为天气原因做的调整。晴天则优先安排观景、登山、公园等户外项目。\n")
+    else:
+        s += "未来几天天气良好，可正常安排户外景点与观景项目，注意早晚温差。\n"
+    return s
+
+
 class PlanRequest(BaseModel):
     areaId: int = Field(default=2, description="目的地城市 area_id（level=2）")
     city: str = Field(default="北京", description="目的地城市名，仅用于提示词")
@@ -232,6 +376,7 @@ SYSTEM_PROMPT = """你是一位专业旅游规划师。基于我提供的真实�
   "references":["引用的攻略出处字符串，如 三亚线路推荐.md"]
 }
 规则：
+0. 【实时数据优先】若我提供了【实时天气数据】，必须严格遵守其中的雨天/恶劣天气调整指令：有雨雪雾雷暴的日期把户外景点改为室内备选，并在安排或 tips 中说明；这是最高优先级的实时约束，优先于静态攻略里的户外推荐。
 1. 我会提供两类素材：【平台商品】(含可下单的 refId/价格) 和【旅游攻略知识】(景点特色、线路安排、交通美食等经验)。
 2. recommendations 和 hotels 中的 refId、name、price 必须来自【平台商品】，不得编造；若某类商品为空则给空数组。
 3. 每天的具体安排、游览顺序、体验亮点、注意事项，要充分吸收【旅游攻略知识】，让行程有理有据、有画面感。
@@ -270,8 +415,12 @@ async def _call_qwen(messages: list[dict[str, str]], max_tokens: int = 1200, jso
 @router.post("/plan")
 async def ai_plan(req: PlanRequest) -> dict[str, Any]:
     products = _collect_products(req.areaId)
+    # 实时天气：工具调用注入（失败静默降级，不影响主流程）
+    weather = await _fetch_weather(req.city, req.days)
     if not DASHSCOPE_API_KEY:
-        return _fallback_plan(req, products)
+        fb = _fallback_plan(req, products)
+        fb["weather"] = weather
+        return fb
 
     # 检索旅游攻略知识库（与城市商品数据互补）
     kb_text, kb_sources = _kb_context(
@@ -287,6 +436,9 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
     )
     if kb_text:
         context += "\n\n=== 旅游攻略知识（行程安排与体验亮点参考）===\n" + kb_text
+    wx_prompt = _weather_prompt(weather)
+    if wx_prompt:
+        context += "\n\n" + wx_prompt
     try:
         content = await _call_qwen(
             [
@@ -299,6 +451,8 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
         data["days"] = req.days
         data["budget"] = req.budget
         data["ai_powered"] = True
+        data["weather"] = weather
+        data["weather_used"] = bool(wx_prompt)
         # 合并知识库引用来源（AI 自报 + 检索命中，去重）
         refs = list(data.get("references") or [])
         for s in kb_sources:
@@ -312,6 +466,7 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
         return data
     except Exception as exc:  # 超时 / 解析失败 / 额度问题 → 降级
         fb = _fallback_plan(req, products)
+        fb["weather"] = weather
         fb["notice"] = f"AI 服务暂时不可用，已切换本地推荐（{type(exc).__name__}）"
         return fb
 

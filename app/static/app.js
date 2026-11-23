@@ -1121,10 +1121,28 @@ function renderAIPlan(d){
   const box=document.getElementById('ai-result');
   const powered=d.ai_powered?'<span class="ai-badge">✦ 真实 AI 生成</span>':'<span class="ai-badge" style="background:#d97706">本地推荐</span>';
   const notice=d.notice?`<div class="note" style="color:#b45309;margin-bottom:12px">${esc(d.notice)}</div>`:'';
+  // 实时天气提示条（工具调用注入 prompt 的可视化凭证）
+  let weatherHtml='';
+  const wx=d.weather;
+  if(wx&&wx.days&&wx.days.length){
+    const chips=wx.days.map(x=>`<span class="wx-chip" style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;padding:6px 10px;margin:3px 5px 0 0;border:1px solid ${x.bad?'#fcd34d':'#bae6fd'};border-radius:9px;background:${x.bad?'#fffbeb':'#f0f9ff'};font-size:12px;min-width:64px">
+      <b style="color:${x.bad?'#b45309':'#0369a1'}">${esc(String(x.date||'').slice(5))}</b>
+      <span>${x.bad?'🌧':'☀️'} ${esc(x.desc||'')}</span>
+      <span style="color:var(--muted)">${x.tempMin!=null&&x.tempMax!=null?x.tempMin+'~'+x.tempMax+'℃':''}</span>
+    </span>`).join('');
+    const badNote=(wx.badDays&&wx.badDays.length)
+      ?`<div style="margin-top:8px;color:#b45309;font-size:13px">🌧 检测到 <b>${wx.badDays.length}</b> 天有降雨/恶劣天气，已让 AI 把当天的户外景点替换为室内备选（博物馆、展馆、商圈等）。</div>`
+      :`<div style="margin-top:8px;color:#0e7490;font-size:13px">☀️ 行程期间天气良好，已按晴天优先安排户外观景项目。</div>`;
+    weatherHtml=`<div style="border:1px solid #bae6fd;background:linear-gradient(180deg,#f0f9ff,#fff);border-radius:12px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:700;color:#0369a1;font-size:14px">🌤️ 已接入实时天气 · 智能调整行程 <span class="api-tag" style="background:#e0f2fe;color:#0369a1">实时数据注入</span></div>
+      <div style="margin-top:6px">${chips}</div>${badNote}
+      <div style="margin-top:6px;font-size:11px;color:var(--muted)">数据来源：${esc(wx.source||'实时天气 API')} · 生成时通过工具调用拉取并注入 AI</div>
+    </div>`;
+  }
   const recHtml=recs=>(recs||[]).filter(x=>x&&x.refId!=null).map(x=>
     `<span class="ai-rec" onclick="aiBuy(${x.refId},'${esc(x.type||'')}','${esc(x.name||'')}')">${esc(x.name||'商品')} ${x.price!=null?'¥'+Number(x.price).toFixed(0):''} →</span>`
   ).join('');
-  let html=`<div class="card" style="border-color:#fcd34d">${notice}
+  let html=`<div class="card" style="border-color:#fcd34d">${notice}${weatherHtml}
     <h2>🗺️ ${esc(d.city||'')} ${esc(d.days||'')} 日行程 ${powered}</h2>
     <p style="color:var(--muted);margin:8px 0 4px">${esc(d.summary||'')}</p>
     <div style="margin-top:10px;font-size:13px">
@@ -1260,6 +1278,8 @@ async function aiRefine(){
     }});
     if(!r.ok){chat.push({role:'ai',text:'调整失败：'+JSON.stringify(r.data)});renderAIPlan(plan);return;}
     const d=r.data;
+    // 微调接口不返回天气，沿用原行程的实时天气数据，保证天气条不消失
+    if(plan.weather) d.weather=plan.weather;
     // 把 AI 的说明追加进对话（行程卡片本身会随 renderAIPlan 重建）
     chat.push({role:'ai',text:d.changes||'已按要求调整好行程'});
     applyPlanContext(d);
