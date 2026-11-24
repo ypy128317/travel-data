@@ -1128,6 +1128,65 @@ async function agentBuyFlight(depId){
   toast('已从 AI 规划带入航班：'+f.flightNo);
 }
 
+/* ==================== 多人协作规划：各人填偏好，AI 生成折中方案 ==================== */
+const DEFAULT_TRAVELERS=[
+  {name:'我', preferences:'历史文化、美食'},
+  {name:'家人', preferences:'自然风光、拍照、节奏轻松'}
+];
+function renderTravelers(){
+  const box=document.getElementById('traveler-list'); if(!box)return;
+  const list=window.__travelers||(window.__travelers=DEFAULT_TRAVELERS.map(x=>({...x})));
+  box.innerHTML=list.map((t,i)=>`<div class="traveler-row">
+    <span class="traveler-idx">${i+1}</span>
+    <input class="tr-name" value="${esc(t.name||'')}" placeholder="称呼（如：爸爸）" oninput="window.__travelers[${i}].name=this.value">
+    <input class="tr-pref" value="${esc(t.preferences||'')}" placeholder="想怎么玩（如：想爬山、不吃辣、带小孩）" oninput="window.__travelers[${i}].preferences=this.value">
+    <button class="tr-del" title="移除" onclick="removeTraveler(${i})" ${list.length<=2?'disabled':''}>×</button>
+  </div>`).join('');
+}
+function addTraveler(){
+  const list=window.__travelers||(window.__travelers=DEFAULT_TRAVELERS.map(x=>({...x})));
+  if(list.length>=6){toast('最多支持 6 位同行者');return;}
+  list.push({name:'同行者'+(list.length+1),preferences:''});renderTravelers();
+}
+function removeTraveler(i){
+  const list=window.__travelers||[];
+  if(list.length<=2){toast('至少需要 2 位同行者');return;}
+  list.splice(i,1);renderTravelers();
+}
+let aiGroupBusy=false;
+async function aiGroupPlan(){
+  if(aiGroupBusy)return;
+  const travelers=(window.__travelers||[]).filter(t=>(t.preferences||'').trim());
+  if(travelers.length<2){toast('请至少填写 2 位同行者的偏好');return;}
+  const [aid,city]=document.getElementById('ai-city').value.split('|');
+  const areaId=aid==='kb'?(KB_AREA[city]||2):+aid;
+  const isKb=aid==='kb';
+  const days=+document.getElementById('ai-days').value;
+  const budget=+document.getElementById('ai-budget').value;
+  aiGroupBusy=true;
+  const btn=document.getElementById('btn-group-plan');if(btn)btn.disabled=true;
+  const box=document.getElementById('ai-result');
+  box.innerHTML=`<div class="card"><div class="loading"><span class="spin"></span>AI 正在分析 ${travelers.length} 位同行者的偏好并寻找折中方案…</div>
+    <div class="note" style="margin-top:8px">示例：A 想爬山、B 想逛街、C 预算紧 —— AI 会用「分时段满足 / 相近体验替代」等手法兼顾各方。</div></div>`;
+  try{
+    const r=await api('/api/ai/group-plan',{method:'POST',body:{
+      areaId, city, days, budget, travelers
+    }});
+    if(!r.ok){box.innerHTML=`<div class="card"><div class="empty">生成失败：${esc(JSON.stringify(r.data))}</div></div>`;return;}
+    const d=r.data;
+    d.is_group_plan=true;                 // 标记：让 renderAIPlan 额外渲染折中说明卡片
+    window.__planChat=[];
+    applyPlanContext(d);
+    renderAIPlan(d);
+    box.scrollIntoView({behavior:'smooth',block:'start'});
+    toast('✦ 已为 '+travelers.length+' 位同行者生成折中方案');
+  }catch(e){
+    box.innerHTML=`<div class="card"><div class="empty">请求出错：${esc(e.message||String(e))}</div></div>`;
+  }finally{
+    aiGroupBusy=false;if(btn)btn.disabled=false;
+  }
+}
+
 let aiPlanBusy=false, aiPlanTimer=null;
 async function aiGeneratePlan(){
   if(aiPlanBusy) return;                       // 防重复点击
@@ -1188,10 +1247,30 @@ function renderAIPlan(d){
       <div style="margin-top:6px;font-size:11px;color:var(--muted)">数据来源：${esc(wx.source||'实时天气 API')} · 生成时通过工具调用拉取并注入 AI</div>
     </div>`;
   }
+  // 多人协作折中说明卡片（仅 group-plan 返回时渲染）
+  let groupHtml='';
+  if(d.is_group_plan){
+    const comps=(d.compromises||[]).map((c,i)=>{
+      const colors=['#be185d','#7c3aed','#0369a1','#b45309','#047857','#4338ca'];
+      const col=colors[i%colors.length];
+      return `<div class="comp-card" style="border-left:3px solid ${col}">
+        <div class="comp-name" style="color:${col}">${esc(c.name||('同行者'+(i+1)))}</div>
+        <div class="comp-line"><b style="color:#047857">✓ 保留</b><span>${esc(c.kept||'—')}</span></div>
+        <div class="comp-line"><b style="color:#b45309">↔ 让步</b><span>${esc(c.gaveUp||'—')}</span></div>
+        <div class="comp-line"><b style="color:#0369a1">✦ 换来</b><span>${esc(c.gained||'—')}</span></div>
+      </div>`;
+    }).join('');
+    groupHtml=`<div class="card" style="border-color:#f9a8d4;background:linear-gradient(180deg,#fffafc,#fff)">
+      <h2>🤝 多人折中方案 <span class="api-tag" style="background:#fce7f3;color:#be185d">AI 协商结果</span></h2>
+      ${d.consensus?`<div class="consensus-box"><b>共同点</b><span>${esc(d.consensus)}</span></div>`:''}
+      <div class="comp-grid">${comps||'<div class="empty">暂无折中说明</div>'}</div>
+      ${d.balance_note?`<div class="note" style="margin-top:10px">⚖️ ${esc(d.balance_note)}</div>`:''}
+    </div>`;
+  }
   const recHtml=recs=>(recs||[]).filter(x=>x&&x.refId!=null).map(x=>
     `<span class="ai-rec" onclick="aiBuy(${x.refId},'${esc(x.type||'')}','${esc(x.name||'')}')">${esc(x.name||'商品')} ${x.price!=null?'¥'+Number(x.price).toFixed(0):''} →</span>`
   ).join('');
-  let html=`<div class="card" style="border-color:#fcd34d">${notice}${weatherHtml}
+  let html=`<div class="card" style="border-color:#fcd34d">${notice}${weatherHtml}${groupHtml}
     <h2>🗺️ ${esc(d.city||'')} ${esc(d.days||'')} 日行程 ${powered}</h2>
     <p style="color:var(--muted);margin:8px 0 4px">${esc(d.summary||'')}</p>
     <div style="margin-top:10px;font-size:13px">
@@ -1739,6 +1818,7 @@ document.querySelectorAll('#steps .step').forEach(s=>s.onclick=()=>{
 });
 document.getElementById('btn-ai-plan').onclick=aiGeneratePlan;
 document.getElementById('btn-ai-chat').onclick=aiChat;
+renderTravelers();   // 初始化多人协作的同行者输入行
 document.getElementById('btn-kb-search').onclick=doKbSearch;
 document.getElementById('kb-q').addEventListener('keydown',e=>{if(e.key==='Enter')doKbSearch();});
 const _btnOpenMap=document.getElementById('btn-open-map');

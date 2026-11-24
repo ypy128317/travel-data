@@ -673,3 +673,148 @@ async def ai_guide(req: GuideRequest) -> dict[str, Any]:
         return {"ok": True, "answer": answer, "spot": req.spot, "ai_powered": True, "kb_sources": sources}
     except Exception as exc:
         return {"ok": False, "answer": f"讲解服务暂时不可用：{exc}", "ai_powered": False}
+
+
+# ==================== 多人偏好协作规划（差异化亮点） ====================
+# 痛点：家庭/朋友多人出行，各人诉求冲突（A想爬山、B想逛街、C预算紧、D带孩子），
+# 现有工具多假设单一用户输入偏好。这里让每位同行者各填偏好，由 AI 生成折中方案，
+# 并明确告诉每个人「保留了什么 / 让了什么 / 换来了什么」，把协作过程可视化。
+# 返回结构与 /plan 完全一致，因此地图联动、下单、海报均可直接复用。
+
+class TravelerPref(BaseModel):
+    name: str = Field(default="同行者", description="同行者称呼")
+    preferences: str = Field(default="", description="此人的游玩偏好或诉求")
+
+
+class GroupPlanRequest(BaseModel):
+    areaId: int = Field(default=2, description="目的地城市 area_id")
+    city: str = Field(default="北京", description="目的地城市名")
+    days: int = Field(default=3, ge=1, le=7, description="行程天数")
+    budget: float = Field(default=3000, gt=0, description="总预算")
+    travelers: list[TravelerPref] = Field(default_factory=list, description="同行者及各自偏好")
+
+
+GROUP_SYSTEM_PROMPT = """你是一位擅长协调多人出行诉求的专业旅游规划师。多位同行者各有不同甚至冲突的偏好（如有人想爬山、有人想逛街、有人预算紧、有人带孩子），你的任务是在一份行程里尽量兼顾所有人，给出让大家都认可的折中方案。
+严格输出 JSON（不要 markdown 代码块），格式如下：
+{
+  "summary": "一句话行程概述，60字以内，体现这是多人折中方案",
+  "days_plan": [
+    {"day":1,"title":"第1天主题","morning":"上午安排","afternoon":"下午安排","evening":"晚上安排",
+     "recommendations":[{"refId":商品ID,"name":"商品名","type":"hotel/scenic/transfer","price":数字}]}
+  ],
+  "hotels":[{"refId":商品ID,"name":"酒店名","type":"hotel","price":数字}],
+  "estimated_cost": 预估总花费数字,
+  "tips": "给这群人的出行小贴士",
+  "references":["引用的攻略出处字符串"],
+  "consensus": "所有人都能共同接受的诉求，一句话，30字内",
+  "compromises": [
+    {"name":"同行者称呼","kept":"TA被保留满足的偏好，一句话","gaveUp":"TA做出的让步，一句话","gained":"TA换来的替代体验或补偿，一句话"}
+  ],
+  "balance_note": "整体如何平衡大家诉求的说明，50字内"
+}
+协调规则：
+0. 【最重要】compromises 数组必须为每一位同行者生成一项，name 原样使用我提供的称呼，一位都不能少；每项都要真诚说明 TA 保留了什么、让步了什么、换来了什么，不要写空话。
+1. 找出大家的共同点写进 consensus；对冲突的诉求用「分时段满足」「分组活动后汇合」「用相近体验替代」等手法折中，尽量让每个人的核心诉求都被照顾到。
+2. 【实时数据优先】若提供了【实时天气数据】，必须遵守雨天/恶劣天气调整指令，把恶劣天气当天的户外景点换成室内备选，并在安排或 tips 中说明。
+3. recommendations 和 hotels 中的 refId、name、price 必须来自【平台商品】，不得编造；某类商品为空则给空数组。
+4. 每天的具体安排要吸收【旅游攻略知识】，让行程有理有据、有画面感；references 填实际参考的攻略出处。
+5. 控制总费用尽量不超过预算，尤其照顾提出预算诉求的成员。
+6. 只输出纯 JSON。
+7. 【硬性】days_plan 必须【恰好】包含指定天数 N 个对象，day 从 1 连续排到 N，一天不能少也不能多；即使素材不足也要排满每天。"""
+
+
+def _fallback_group_plan(req: GroupPlanRequest, products: dict[str, list[dict[str, Any]]],
+                         weather: dict[str, Any] | None) -> dict[str, Any]:
+    """多人协作降级：用基础行程 + 程序化生成的折中说明，保证演示不中断。"""
+    base_req = PlanRequest(areaId=req.areaId, city=req.city, days=req.days,
+                           budget=req.budget, preferences="多人折中")
+    data = _fallback_plan(base_req, products)
+    data["weather"] = weather
+    data["consensus"] = "大家一起看风景、尝美食、留下美好回忆"
+    data["compromises"] = [
+        {
+            "name": (t.name or f"同行者{i + 1}"),
+            "kept": f"偏好「{t.preferences or '休闲观光'}」已纳入行程考虑",
+            "gaveUp": "部分时段需与同行者共同安排",
+            "gained": "体验了更丰富的整体行程",
+        }
+        for i, t in enumerate(req.travelers or [])
+    ]
+    data["balance_note"] = "AI 服务暂不可用，已按通用折中规则生成（本地推荐模式）"
+    data["ai_powered"] = False
+    return data
+
+
+@router.post("/group-plan")
+async def ai_group_plan(req: GroupPlanRequest) -> dict[str, Any]:
+    """多人偏好协作规划：各同行者填偏好，AI 生成兼顾所有人的折中行程。"""
+    travelers = req.travelers or []
+    # 数据库临时不可用时降级为空商品，避免整个协作接口 500（不影响 AI 折中逻辑）
+    try:
+        products = _collect_products(req.areaId)
+    except Exception:
+        products = {"hotels": [], "scenics": [], "transfers": []}
+    weather = await _fetch_weather(req.city, req.days)
+    if not DASHSCOPE_API_KEY:
+        return _fallback_group_plan(req, products, weather)
+
+    pref_text = "\n".join(
+        f"- {i + 1}. {t.name or ('同行者' + str(i + 1))}：{t.preferences or '无特别偏好'}"
+        for i, t in enumerate(travelers)
+    ) or "- 无具体同行者偏好"
+    kb_text, kb_sources = _kb_context(
+        req.city, f"{req.city} {' '.join(t.preferences for t in travelers)} {req.days}日 线路 景点 行程", top_k=6
+    )
+    context = (
+        f"目的地：{req.city}（areaId={req.areaId}），行程 {req.days} 天，总预算 {req.budget:.0f} 元。\n\n"
+        "=== 同行者及各自偏好 ===\n" + pref_text + "\n"
+        "请为每一位同行者生成 compromises 中的一项，务必兼顾各方诉求。\n\n"
+        "=== 平台商品（可下单，refId 来自这里）===\n"
+        "可选酒店：" + json.dumps(products["hotels"], ensure_ascii=False) + "\n"
+        "可选景点：" + json.dumps(products["scenics"], ensure_ascii=False) + "\n"
+        "可选接送：" + json.dumps(products["transfers"], ensure_ascii=False)
+    )
+    if kb_text:
+        context += "\n\n=== 旅游攻略知识（行程安排与体验亮点参考）===\n" + kb_text
+    wx_prompt = _weather_prompt(weather)
+    if wx_prompt:
+        context += "\n\n" + wx_prompt
+    try:
+        content = await _call_qwen(
+            [
+                {"role": "system", "content": GROUP_SYSTEM_PROMPT},
+                {"role": "user", "content": context},
+            ],
+            max_tokens=2000,
+        )
+        data = json.loads(content)
+        data["city"] = req.city
+        data["days"] = req.days
+        data["budget"] = req.budget
+        data["ai_powered"] = True
+        data["weather"] = weather
+        data["weather_used"] = bool(wx_prompt)
+        data["travelers"] = [{"name": t.name or f"同行者{i + 1}", "preferences": t.preferences}
+                             for i, t in enumerate(travelers)]
+        # 复用商品校验 + 天数校正，防止编造 refId 与天数错乱
+        # 注意：可信源必须是数据库真实商品 products，不能用 AI 自己的返回校验自己
+        real_valid: dict[str, dict[str, Any]] = {}
+        for group in (products.get("hotels") or []) + (products.get("scenics") or []) + (products.get("transfers") or []):
+            if group and group.get("refId") is not None:
+                real_valid[str(group["refId"])] = group
+        base_req = PlanRequest(areaId=req.areaId, city=req.city, days=req.days,
+                               budget=req.budget, preferences="多人折中")
+        data = _clean_refs(data, real_valid)
+        data = _force_day_count(data, base_req, products)
+        # 合并知识库引用来源
+        refs = list(data.get("references") or [])
+        for s in kb_sources:
+            if s["source"] not in refs:
+                refs.append(s["source"])
+        data["references"] = refs
+        data["kb_sources"] = kb_sources
+        return data
+    except Exception as exc:
+        fb = _fallback_group_plan(req, products, weather)
+        fb["notice"] = f"AI 服务暂时不可用，已切换本地折中推荐（{type(exc).__name__}）"
+        return fb

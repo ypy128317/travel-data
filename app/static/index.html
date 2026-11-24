@@ -226,6 +226,23 @@
   .poster-wrap img{max-width:360px;width:100%;border-radius:8px;display:block}
   .poster-wrap .pt-actions{display:flex;gap:9px;justify-content:center;margin-top:14px}
   @keyframes spin{to{transform:rotate(360deg)}}
+  /* ---- 多人协作规划 ---- */
+  .traveler-list{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+  .traveler-row{display:flex;align-items:center;gap:8px}
+  .traveler-idx{width:24px;height:24px;border-radius:50%;background:#fce7f3;color:#be185d;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none}
+  .traveler-row .tr-name{width:120px;padding:9px 11px;border:1px solid #fbcfe8;border-radius:9px;font-size:12.5px;font-family:inherit;outline:none}
+  .traveler-row .tr-pref{flex:1;padding:9px 11px;border:1px solid #fbcfe8;border-radius:9px;font-size:12.5px;font-family:inherit;outline:none}
+  .traveler-row .tr-name:focus,.traveler-row .tr-pref:focus{border-color:#ec4899;box-shadow:0 0 0 3px rgba(236,72,153,.12)}
+  .traveler-row .tr-del{width:28px;height:28px;border:1px solid #fecdd3;background:#fff1f2;color:#e11d48;border-radius:8px;font-size:18px;line-height:1;cursor:pointer;flex:none}
+  .traveler-row .tr-del:disabled{opacity:.35;cursor:not-allowed}
+  .consensus-box{display:flex;align-items:center;gap:10px;background:linear-gradient(90deg,#fdf2f8,#fff);border:1px solid #fbcfe8;border-radius:10px;padding:10px 14px;margin:10px 0;font-size:13px}
+  .consensus-box b{color:#be185d;flex:none}
+  .consensus-box span{color:#374151}
+  .comp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-top:12px}
+  .comp-card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px}
+  .comp-name{font-weight:700;font-size:13.5px;margin-bottom:8px}
+  .comp-line{display:flex;gap:8px;font-size:12px;line-height:1.6;color:#4b5563;margin:3px 0}
+  .comp-line b{flex:none;font-weight:700;width:46px}
   /* ---- AI 多轮微调对话 ---- */
   .refine-box{background:linear-gradient(180deg,#faf5ff,#fff);border:1px solid #ddd6fe;border-radius:12px;padding:15px 18px;margin-bottom:14px;box-shadow:var(--shadow)}
   .refine-box h3{margin:0 0 4px;font-size:14px;color:#6d28d9;display:flex;align-items:center;gap:8px}
@@ -400,6 +417,16 @@
     <div class="actions">
       <button class="btn btn-ai" id="btn-ai-plan">生成我的行程</button>
       <span class="api-tag">POST /api/ai/plan</span>
+    </div>
+  </div>
+  <div class="card" id="group-card" style="border-color:#fbcfe8;background:linear-gradient(180deg,#fffafc,#fff)">
+    <h2>👨‍👩‍👧‍👦 多人协作规划 <span class="api-tag" style="background:#fce7f3;color:#be185d">每人填偏好 · AI 折中</span></h2>
+    <p class="desc">家庭 / 朋友出行各有所好？让每位同行者说出自己想怎么玩，AI 会找共同点、化解分歧，生成一份兼顾所有人的折中行程，并明确告诉每个人「保留了什么、让了什么、换来了什么」。</p>
+    <div id="traveler-list" class="traveler-list"></div>
+    <div class="actions" style="margin-top:10px">
+      <button class="btn sm ghost" onclick="addTraveler()">＋ 添加同行者</button>
+      <button class="btn btn-ai" id="btn-group-plan" onclick="aiGroupPlan()">✦ 生成折中方案</button>
+      <span class="api-tag">POST /api/ai/group-plan</span>
     </div>
   </div>
   <div id="ai-result"></div>
@@ -638,6 +665,6 @@
     </div>
   </div>
 </div>
-<script src="/app.js?v=20261124b"></script>
+<script src="/app.js?v=20261124c"></script>
 </body>
 </html>
