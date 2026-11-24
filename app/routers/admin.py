@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from ..database import fetch_all, fetch_one
 from ..knowledge import KB
+from ..utils import fix_mojibake
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -237,8 +238,8 @@ def guides_list(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
     )
     guides = [
         {
-            "name": r["guide_name"],
-            "city": r.get("city_name") or "-",
+            "name": fix_mojibake(r["guide_name"]),
+            "city": fix_mojibake(r.get("city_name")) or "-",
             "level": GUIDE_LEVEL_LABEL.get(r["level_code"], r["level_code"]),
             "rating": round(_num(r["rating"]), 2),
             "services": int(r.get("service_count") or 0),
@@ -254,7 +255,7 @@ def guides_list(limit: int = Query(default=20, ge=1, le=200)) -> dict[str, Any]:
     booking_items = [
         {
             "no": b["booking_no"],
-            "city": b.get("city_name") or "-",
+            "city": fix_mojibake(b.get("city_name")) or "-",
             "date": str(b.get("service_date") or ""),
             "days": int(b.get("days") or 0),
             "amount": round(_num(b.get("total_amount")), 2),

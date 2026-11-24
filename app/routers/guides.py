@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 from ..database import db_cursor, fetch_all, fetch_one
 from ..dependencies import get_current_user_id
 from ..errors import bad_request, conflict, not_found
-from ..utils import format_date, format_datetime, local_now, make_no, money, parse_date
+from ..utils import fix_mojibake, format_date, format_datetime, local_now, make_no, money, parse_date
 
 router = APIRouter(prefix="/api/v1", tags=["guides"])
 
@@ -60,9 +60,9 @@ def _guide_payload(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "guideId": row["id"],
         "guideNo": row["guide_no"],
-        "guideName": row["guide_name"],
+        "guideName": fix_mojibake(row["guide_name"]),
         "areaId": row["area_id"],
-        "cityName": row["city_name"],
+        "cityName": fix_mojibake(row["city_name"]),
         "levelCode": row["level_code"],
         "levelLabel": LEVEL_LABEL.get(row["level_code"], row["level_code"]),
         "rating": float(row["rating"]),
@@ -70,9 +70,9 @@ def _guide_payload(row: dict[str, Any]) -> dict[str, Any]:
         "serviceCount": int(row["service_count"]),
         "yearsExperience": int(row["years_experience"]),
         "pricePerDay": money(row["price_per_day"]),
-        "languages": row["languages"],
-        "specialties": row["specialties"],
-        "intro": row["intro"],
+        "languages": fix_mojibake(row["languages"]),
+        "specialties": fix_mojibake(row["specialties"]),
+        "intro": fix_mojibake(row["intro"]),
         "avatarUrl": row["avatar_url"],
         "tags": _loads(row["tags_payload"], []),
         "statusCode": row["status_code"],
@@ -86,11 +86,11 @@ def _booking_payload(row: dict[str, Any]) -> dict[str, Any]:
         "bookingNo": row["booking_no"],
         "userId": row["user_id"],
         "guideId": row["guide_id"],
-        "guideName": row["guide_name"],
+        "guideName": fix_mojibake(row["guide_name"]),
         "guideLevel": LEVEL_LABEL.get(row["level_code"], row["level_code"]),
         "guideAvatar": row["avatar_url"],
         "areaId": row["area_id"],
-        "cityName": row["city_name"],
+        "cityName": fix_mojibake(row["city_name"]),
         "serviceDate": str(row["service_date"]),
         "days": int(row["days"]),
         "peopleCount": int(row["people_count"]),

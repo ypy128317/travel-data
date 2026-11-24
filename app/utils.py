@@ -9,6 +9,32 @@ from zoneinfo import ZoneInfo
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 
+def fix_mojibake(value: Any) -> Any:
+    """修复双重 UTF-8 编码导致的中文乱码（如 'é™ˆæµ·é£Ž' → '陈海风'）。
+
+    种子数据导入时 UTF-8 字节被当作 cp1252/latin-1 再编码一次，数据库里存的是乱码。
+    这里在读取层把字符串按 cp1252 编码回原始字节、再用 utf-8 解码还原中文。
+    只对"含 Latin-1 补充区字符且能成功还原出中文"的字符串做转换，正常中文/英文原样返回。
+    """
+    if not isinstance(value, str) or not value:
+        return value
+    # 双重编码的乱码特征：含 U+0080~U+00FF 区间的字符（é、™、ˆ 等）
+    if not any("\u0080" <= ch <= "\u00ff" for ch in value):
+        return value
+    try:
+        fixed = value.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # 个别字节 cp1252 无定义时退回 latin-1 再试
+        try:
+            fixed = value.encode("latin-1").decode("utf-8")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return value
+    # 只有还原结果确实含中文才采用，避免误伤合法的西欧文字
+    if any("\u4e00" <= ch <= "\u9fff" for ch in fixed):
+        return fixed
+    return value
+
+
 def parse_date(value: str, field_name: str) -> date:
     try:
         return datetime.strptime(value, "%Y-%m-%d").date()
