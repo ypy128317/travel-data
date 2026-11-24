@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>云游旅行 · 运营管理后台</title>
+<script src="https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+  :root{
+    --bg:#0f172a;--side:#111c34;--panel:#1a2740;--panel2:#1f2f4d;--line:#2a3a5c;
+    --text:#e2e8f0;--muted:#94a3b8;--primary:#6366f1;--accent:#22d3ee;
+    --green:#34d399;--red:#f87171;--amber:#fbbf24;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  [v-cloak]{display:none}
+  body{font-family:'Microsoft YaHei','PingFang SC',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+  a{color:inherit;text-decoration:none}
+
+  /* 登录页 */
+  #login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+    background:radial-gradient(circle at 30% 20%,#1e3a8a55,transparent 50%),radial-gradient(circle at 80% 80%,#6366f133,transparent 50%),var(--bg);z-index:100}
+  .login-box{width:380px;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:38px;
+    box-shadow:0 25px 60px -20px #000a}
+  .login-logo{font-size:34px;text-align:center;margin-bottom:8px}
+  .login-title{text-align:center;font-size:21px;font-weight:700;letter-spacing:1px}
+  .login-sub{text-align:center;color:var(--muted);font-size:12px;margin:8px 0 26px}
+  .login-box label{display:block;font-size:12px;color:var(--muted);margin:14px 0 6px}
+  .login-box input{width:100%;padding:12px 14px;background:var(--bg);border:1px solid var(--line);border-radius:9px;
+    color:var(--text);font-size:14px;outline:none;transition:.2s}
+  .login-box input:focus{border-color:var(--primary);box-shadow:0 0 0 3px #6366f133}
+  .login-btn{width:100%;margin-top:24px;padding:13px;background:linear-gradient(135deg,#6366f1,#8b5cf6);border:0;
+    border-radius:9px;color:#fff;font-size:15px;font-weight:600;cursor:pointer;transition:.2s}
+  .login-btn:hover{filter:brightness(1.12);transform:translateY(-1px)}
+  .login-btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
+  .login-tip{margin-top:16px;text-align:center;color:var(--muted);font-size:11px;line-height:1.7}
+  .login-err{margin-top:12px;text-align:center;color:var(--red);font-size:13px;min-height:18px}
+
+  /* 主框架 */
+  #shell{display:flex;min-height:100vh}
+  .side{position:fixed;left:0;top:0;bottom:0;width:228px;background:var(--side);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;z-index:10}
+  .brand{padding:22px 20px;border-bottom:1px solid var(--line)}
+  .brand h1{font-size:17px;font-weight:700;letter-spacing:.5px}
+  .brand p{font-size:11px;color:var(--muted);margin-top:4px}
+  .nav{padding:14px 12px;flex:1;overflow-y:auto}
+  .nav a{display:flex;align-items:center;gap:11px;padding:11px 13px;border-radius:9px;color:var(--muted);
+    font-size:13.5px;margin-bottom:4px;cursor:pointer;transition:.15s}
+  .nav a:hover{background:#ffffff08;color:var(--text)}
+  .nav a.active{background:linear-gradient(135deg,#6366f133,#8b5cf622);color:#c7d2fe;font-weight:600;
+    box-shadow:inset 3px 0 0 var(--primary)}
+  .nav a .ic{font-size:16px;width:20px;text-align:center}
+  .nav a.sep{margin-top:14px;border-top:1px solid var(--line);padding-top:16px}
+  .side-foot{padding:14px 20px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}
+  .side-foot button{background:none;border:1px solid var(--line);color:var(--muted);padding:6px 12px;
+    border-radius:7px;cursor:pointer;font-size:11px;width:100%}
+  .side-foot button:hover{border-color:var(--red);color:var(--red)}
+
+  .main{margin-left:228px;flex:1;padding:0 0 40px;min-width:0}
+  .topbar{height:66px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;
+    padding:0 30px;background:#0f172aaa;backdrop-filter:blur(8px);position:sticky;top:0;z-index:5}
+  .topbar h2{font-size:18px;font-weight:600}
+  .topbar .who{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:10px}
+  .badge{background:#22d3ee22;color:var(--accent);padding:3px 10px;border-radius:20px;font-size:11px}
+  .content{padding:26px 30px}
+
+  /* 模块 */
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px 20px;transition:.2s}
+  .card:hover{border-color:#3b4d75;transform:translateY(-2px)}
+  .kpi{display:flex;align-items:center;justify-content:space-between}
+  .kpi .ic{font-size:26px}
+  .kpi .label{font-size:12px;color:var(--muted);margin-bottom:7px}
+  .kpi .val{font-size:25px;font-weight:700;letter-spacing:.5px}
+  .kpi .val small{font-size:12px;color:var(--muted);font-weight:400;margin-left:3px}
+  .tone-blue .val{color:#93c5fd}.tone-green .val{color:var(--green)}.tone-purple .val{color:#c4b5fd}
+  .tone-orange .val{color:var(--amber)}.tone-teal .val{color:var(--accent)}.tone-red .val{color:var(--red)}
+  .tone-indigo .val{color:#a5b4fc}.tone-pink .val{color:#f9a8d4}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-bottom:18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px 20px}
+  .panel h3{font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .panel .desc{font-size:11px;color:var(--muted);margin-bottom:12px}
+  .chart{width:100%;height:300px}
+  .chart-lg{height:320px}
+
+  .table-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;padding:11px 12px;color:var(--muted);font-weight:500;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:11px 12px;border-bottom:1px solid #ffffff08;white-space:nowrap}
+  tr:hover td{background:#ffffff05}
+  .status{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px}
+  .st-paid,.st-success,.st-confirmed,.st-finished,.st-active,.st-normal{background:#34d39922;color:var(--green)}
+  .st-pending,.st-pending_payment,.st-in_progress{background:#fbbf2422;color:var(--amber)}
+  .st-cancelled,.st-rejected,.st-inactive{background:#f8717122;color:var(--red)}
+  .st-vip,.st-gold{background:#818cf822;color:#a5b4fc}
+  .empty{padding:40px;text-align:center;color:var(--muted)}
+
+  .cap-grid{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+  .cap{background:#6366f11a;border:1px solid #6366f144;color:#c7d2fe;padding:8px 14px;border-radius:9px;font-size:12.5px}
+  .mini-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:14px 0}
+  .mini{background:var(--panel2);border-radius:10px;padding:14px;text-align:center}
+  .mini .n{font-size:22px;font-weight:700;color:var(--accent)}
+  .mini .l{font-size:11px;color:var(--muted);margin-top:5px}
+  .loading{text-align:center;color:var(--muted);padding:30px;font-size:13px}
+  @media(max-width:1100px){.cards{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.mini-stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- ============ 登录 ============ -->
+  <div id="login" v-if="!logged">
+    <div class="login-box">
+      <div class="login-logo">🧳</div>
+      <div class="login-title">云游旅行 · 运营后台</div>
+      <div class="login-sub">TRAVEL OPERATION CONSOLE</div>
+      <label>管理员账号</label>
+      <input v-model="lgUser" @keydown.enter="doLogin" autocomplete="username">
+      <label>登录密码</label>
+      <input v-model="lgPass" type="password" @keydown.enter="doLogin" autocomplete="current-password">
+      <button class="login-btn" :disabled="lgBusy" @click="doLogin">{{ lgBusy ? '登录中…' : '登 录' }}</button>
+      <div class="login-err">{{ lgErr }}</div>
+      <div class="login-tip">演示账号：admin / 123456<br>本页面仅供项目运营人员查看平台数据</div>
+    </div>
+  </div>
+
+  <!-- ============ 主体 ============ -->
+  <div id="shell" v-else>
+    <aside class="side">
+      <div class="brand"><h1>🧳 云游旅行</h1><p>运营管理后台 v1.0</p></div>
+      <nav class="nav">
+        <a v-for="n in navs" :key="n.m" :class="{active:current===n.m,sep:n.sep}" @click="go(n.m)">
+          <span class="ic">{{ n.ic }}</span>{{ n.t }}
+        </a>
+      </nav>
+      <div class="side-foot">
+        <div style="margin-bottom:10px">登录身份：<span style="color:#c7d2fe">{{ who }}</span></div>
+        <button @click="doLogout">退出登录</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="topbar">
+        <h2>{{ pageTitle }}</h2>
+        <div class="who"><span class="badge">● 系统运行中</span><span>{{ todayLine }}</span></div>
+      </div>
+      <div class="content">
+
+        <!-- 数据概览 -->
+        <section v-show="current==='dash'">
+          <div class="cards">
+            <div v-for="c in cards" :key="c.key" class="card" :class="'tone-'+c.tone">
+              <div class="kpi"><div><div class="label">{{ c.label }}</div>
+                <div class="val">{{ fmtNum(c.value) }}<small>{{ c.unit }}</small></div></div>
+                <div class="ic">{{ c.icon }}</div></div>
+            </div>
+          </div>
+          <div class="grid2">
+            <div class="panel"><h3>📈 订单趋势</h3><div class="desc">最近 14 天订单量与营收变化</div><div id="chart-trend" class="chart chart-lg"></div></div>
+            <div class="panel"><h3>🥧 订单类型分布</h3><div class="desc">各品类订单占比</div><div id="chart-type" class="chart chart-lg"></div></div>
+          </div>
+          <div class="panel"><h3>📊 订单状态分布</h3><div class="desc">全部订单当前状态构成</div><div id="chart-status" class="chart" style="height:240px"></div></div>
+        </section>
+
+        <!-- 订单管理 -->
+        <section v-show="current==='orders'">
+          <div class="panel"><h3>📋 订单明细</h3><div class="desc">平台最近订单，按创建时间倒序（最多 100 条）</div>
+            <div class="table-wrap" v-html="tables.orders"></div></div>
+        </section>
+
+        <!-- 用户与会员 -->
+        <section v-show="current==='users'">
+          <div class="panel"><h3>👥 用户与会员</h3><div class="desc">注册用户及会员等级、积分余额</div>
+            <div class="table-wrap" v-html="tables.users"></div></div>
+        </section>
+
+        <!-- 退款管理 -->
+        <section v-show="current==='refunds'">
+          <div class="panel"><h3>💰 退款申请</h3><div class="desc">售后退款申请与处理状态</div>
+            <div class="table-wrap" v-html="tables.refunds"></div></div>
+        </section>
+
+        <!-- 导游管理 -->
+        <section v-show="current==='guides'">
+          <div class="panel" style="margin-bottom:18px"><h3>🧭 导游档案</h3><div class="desc">按评分排序的在岗导游</div>
+            <div class="table-wrap" v-html="tables.guides"></div></div>
+          <div class="panel"><h3>📅 导游预约记录</h3><div class="desc">真人导游预约单</div>
+            <div class="table-wrap" v-html="tables.bookings"></div></div>
+        </section>
+
+        <!-- AI 运营数据 -->
+        <section v-show="current==='ai'">
+          <div class="panel" style="margin-bottom:18px">
+            <h3>🤖 AI 能力概览</h3><div class="desc">模型、知识库与产品化能力</div>
+            <div class="mini-stats">
+              <div v-for="m in aiMini" :key="m.l" class="mini"><div class="n">{{ m.n }}</div><div class="l">{{ m.l }}</div></div>
+            </div>
+            <div style="font-size:12.5px;color:var(--muted);margin-top:6px">当前使用模型：<b style="color:var(--accent)">{{ aiModel }}</b></div>
+            <div class="cap-grid"><span v-for="c in aiCaps" :key="c" class="cap">✓ {{ c }}</span></div>
+          </div>
+          <div class="grid2">
+            <div class="panel"><h3>📚 知识库覆盖城市</h3><div class="desc">已沉淀旅游攻略的目的地</div>
+              <div class="cap-grid"><span v-for="c in aiCities" :key="c" class="cap">📍 {{ c }}</span>
+                <span v-if="!aiCities.length" style="color:var(--muted);font-size:12px">暂无</span></div></div>
+            <div class="panel"><h3>🗂️ 知识库内容类型</h3><div class="desc">攻略文档分片构成</div><div id="chart-kb" class="chart" style="height:260px"></div></div>
+          </div>
+        </section>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/admin.js"></script>
+</body>
+</html>

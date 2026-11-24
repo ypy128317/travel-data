@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from .config import APP_PORT, TMAP_KEY
 from .database import fetch_all, fetch_one
-from .routers import ai, guides, orders, products, refunds, users
+from .routers import admin, ai, guides, orders, products, refunds, users
 
 app = FastAPI(
     title="云游旅行 · AI 旅行规划 API",
@@ -26,6 +26,7 @@ app.include_router(orders.router)
 app.include_router(refunds.router)
 app.include_router(ai.router)
 app.include_router(guides.router)
+app.include_router(admin.router)
 
 
 
@@ -53,6 +54,17 @@ def app_page() -> Response:
 @app.get("/app.js", tags=["meta"], include_in_schema=False)
 def app_script() -> Response:
     return _no_cache(FileResponse(STATIC_DIR / "app.js", media_type="application/javascript"))
+
+
+@app.get("/admin", tags=["meta"], include_in_schema=False)
+def admin_page() -> Response:
+    """运营管理后台（工作人员端），与游客端首页隔离。"""
+    return _no_cache(FileResponse(STATIC_DIR / "admin.html"))
+
+
+@app.get("/admin.js", tags=["meta"], include_in_schema=False)
+def admin_script() -> Response:
+    return _no_cache(FileResponse(STATIC_DIR / "admin.js", media_type="application/javascript"))
 
 
 
