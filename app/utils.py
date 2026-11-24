@@ -9,27 +9,55 @@ from zoneinfo import ZoneInfo
 LOCAL_TZ = ZoneInfo("Asia/Shanghai")
 
 
+# cp1252 字符 → 原始字节 的反向映射（字节 0x80~0xFF 经 cp1252 解码得到的字符）
+_CP1252_REVERSE = {}
+for _b in range(0x80, 0x100):
+    try:
+        _CP1252_REVERSE[bytes([_b]).decode("cp1252")] = _b
+    except UnicodeDecodeError:
+        pass  # cp1252 中 0x81/0x8D/0x8F/0x90/0x9D 未定义
+
+
+def _mojibake_to_bytes(text: str) -> bytes | None:
+    """把双重编码的乱码字符串逐字符还原成原始 UTF-8 字节。
+
+    逐字符映射而非 str.encode()，因为乱码里可能混有 cp1252 特殊符号（如 ' ' U+2018）
+    和 cp1252 未定义区间被保留的控制字符（U+008D 等），整串 encode 会失败。
+    """
+    out = bytearray()
+    for ch in text:
+        code = ord(ch)
+        if code < 0x80:
+            out.append(code)
+        elif ch in _CP1252_REVERSE:
+            out.append(_CP1252_REVERSE[ch])
+        elif 0x80 <= code <= 0x9F:
+            out.append(code)  # cp1252 未定义字节被直接保留为同值控制字符
+        else:
+            return None
+    return bytes(out)
+
+
 def fix_mojibake(value: Any) -> Any:
     """修复双重 UTF-8 编码导致的中文乱码（如 'é™ˆæµ·é£Ž' → '陈海风'）。
 
     种子数据导入时 UTF-8 字节被当作 cp1252/latin-1 再编码一次，数据库里存的是乱码。
-    这里在读取层把字符串按 cp1252 编码回原始字节、再用 utf-8 解码还原中文。
-    只对"含 Latin-1 补充区字符且能成功还原出中文"的字符串做转换，正常中文/英文原样返回。
+    这里在读取层把字符串还原成原始字节、再用 utf-8 解码还原中文。
+    只对"能成功还原出中文"的字符串做转换，正常中文/英文/西欧文字原样返回。
     """
     if not isinstance(value, str) or not value:
         return value
-    # 双重编码的乱码特征：含 U+0080~U+00FF 区间的字符（é、™、ˆ 等）
+    # 快速排除：不含 Latin-1 补充区字符（U+0080~U+00FF）的必然不是双重编码乱码
     if not any("\u0080" <= ch <= "\u00ff" for ch in value):
         return value
+    raw = _mojibake_to_bytes(value)
+    if raw is None:
+        return value
     try:
-        fixed = value.encode("cp1252").decode("utf-8")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        # 个别字节 cp1252 无定义时退回 latin-1 再试
-        try:
-            fixed = value.encode("latin-1").decode("utf-8")
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            return value
-    # 只有还原结果确实含中文才采用，避免误伤合法的西欧文字
+        fixed = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return value
+    # 只有还原结果确实含中文才采用，避免误伤合法的西欧文字（如 Café）
     if any("\u4e00" <= ch <= "\u9fff" for ch in fixed):
         return fixed
     return value
