@@ -93,6 +93,19 @@
   .iw .iw-img{width:100%;height:96px;object-fit:cover;border-radius:8px;margin-bottom:7px;display:block}
   .day-card .day-photo{width:100%;height:78px;object-fit:cover;border-radius:8px;margin-bottom:8px;display:block}
   .spotThumb{width:20px;height:20px;border-radius:5px;object-fit:cover;vertical-align:-5px;margin-right:5px;border:1px solid #e6e9f2}
+
+  /* ===== 地图升级：播放 / 视角 / 动效 ===== */
+  .tool-btn{border:1px solid #e0e3ff;background:#fff;color:#4f46e5;border-radius:9px;padding:7px 12px;font-size:12px;
+    font-weight:600;cursor:pointer;font-family:inherit;transition:.18s;white-space:nowrap}
+  .tool-btn:hover{background:#eef0ff;transform:translateY(-1px)}
+  .tool-btn.playing{background:linear-gradient(135deg,#5b52ea,#4f46e5);color:#fff;border-color:transparent;
+    animation:pulse 1.6s ease-in-out infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 6px 16px -6px rgba(79,70,229,.9)}50%{box-shadow:0 6px 24px -4px rgba(79,70,229,1)}}
+  .day-card.playing{border-color:#4f46e5!important;box-shadow:0 0 0 2px rgba(79,70,229,.22),0 8px 20px -8px rgba(79,70,229,.6);transform:translateY(-2px)}
+  .play-progress{height:3px;background:#eef0ff;border-radius:2px;margin-top:9px;overflow:hidden}
+  .play-progress i{display:block;height:100%;background:linear-gradient(90deg,#5b52ea,#38bdf8);width:0;transition:width 2.4s linear;border-radius:2px}
+  .map-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:999px;
+    background:linear-gradient(135deg,#eef0ff,#e0f2fe);color:#4f46e5;border:1px solid #dbe3ff}
 </style>
 <!-- 兼容 iframe 沙箱：localStorage/sessionStorage 不可用时提供内存实现 -->
 <script type="text/javascript">
@@ -119,7 +132,7 @@
 <body>
 <header>
   <h1>云游旅行 · 线路地图</h1>
-  <p>景点打点连线 · 按天着色的 AI 行程地图 · 腾讯地图（GCJ-02）· Key 由后端安全注入</p>
+  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 腾讯地图（GCJ-02）· Key 由后端安全注入</p>
 </header>
 <div class="wrap">
   <div class="card modebar">
@@ -127,6 +140,8 @@
       <button id="tab-free" class="active">自由绘制线路</button>
       <button id="tab-plan">AI 行程地图</button>
     </div>
+    <button class="tool-btn" id="view-toggle" title="切换 2D / 3D 地图视角">◩ 3D 视角</button>
+    <span class="map-badge">✦ 智能路线可视化</span>
     <span class="status" id="status"></span>
   </div>
 
@@ -189,8 +204,30 @@ const COORDS={
 const DAY_COLORS=['#e11d48','#2563eb','#059669','#d97706','#7c3aed','#0891b2','#db2777'];
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ===== 精致序号 Marker：SVG data URI，腾讯地图 MarkerStyle.src 原生支持 ===== */
+function pinSvg(num,color){
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46">'+
+    '<defs><filter id="s" x="-60%" y="-60%" width="220%" height="220%">'+
+    '<feDropShadow dx="0" dy="2.5" stdDeviation="1.8" flood-color="#0f172a" flood-opacity="0.35"/></filter></defs>'+
+    '<path d="M17 2C8.7 2 2 8.7 2 17c0 11 15 27 15 27s15-16 15-27C32 8.7 25.3 2 17 2z" '+
+    'fill="'+color+'" stroke="#fff" stroke-width="2" filter="url(#s)"/>'+
+    '<circle cx="17" cy="17" r="10.5" fill="#fff"/>'+
+    '<text x="17" y="22" text-anchor="middle" font-family="Arial,Helvetica,sans-serif" font-size="13" '+
+    'font-weight="700" fill="'+color+'">'+num+'</text></svg>';
+  return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+}
+/* 折线：实线带行进方向箭头，虚线用于「直线兜底」 */
+function polyStyle(color,dashed){
+  const o={color:color,width:dashed?3:5,borderWidth:1,borderColor:'#fff',lineCap:'round'};
+  if(dashed){o.dashArray=[5,5];}
+  else{o.showArrow=true;o.arrowOptions={space:60,width:5,height:8};}
+  return new TMap.PolylineStyle(o);
+}
+
 let map=null, markerLayer=null, lineLayer=null, labelLayer=null, infoWin=null;
 let autoDrawn=false, pendingAction=null;
+let is3D=false, playTimer=null, playDays=[], playIdx=0;
 let mode='free', currentPlan=null, planPoints=[], planDrawn=false, activeDay=0, lastPlanUid='';
 
 function initMap(){
@@ -200,7 +237,10 @@ function initMap(){
   // 容器宽高为 0（面板 display:none）时不要建图，否则腾讯地图会抛 far <= 0
   if(!box||box.clientWidth<10||box.clientHeight<10)return false;
   try{
-    map=new TMap.Map('map',{zoom:11,center:new TMap.LatLng(30.25,120.15)});
+    map=new TMap.Map('map',{zoom:11,center:new TMap.LatLng(30.25,120.15),viewMode:'2D'});
+    // 专业地图控件：缩放 + 比例尺
+    try{map.addControl(new TMap.control.Zoom({position:'bottom-right'}));}catch(e){}
+    try{map.addControl(new TMap.control.Scale({position:'bottom-left'}));}catch(e){}
     $('status').textContent='';
     return true;
   }catch(e){$('status').textContent='地图初始化失败：'+(e.message||e);return false;}
@@ -267,10 +307,12 @@ async function draw(){
   }
   if(!pts.length){setStatus('未定位到任何景点，试试内置 6 城市景点或更具体的名称');return}
   clearLayers();
+  const fStyles={};
+  pts.forEach((p,i)=>{fStyles['p'+i]=new TMap.MarkerStyle({width:34,height:46,anchor:{x:17,y:46},src:pinSvg(i+1,'#e11d48')});});
   markerLayer=new TMap.MultiMarker({
     map:map,
-    styles:{pin:new TMap.MarkerStyle({width:26,height:36,anchor:{x:13,y:36},color:'#e11d48'})},
-    geometries:pts.map((p,i)=>({id:'p'+i,styleId:'pin',position:new TMap.LatLng(p.lat,p.lng),properties:{title:p.name}}))
+    styles:fStyles,
+    geometries:pts.map((p,i)=>({id:'p'+i,styleId:'p'+i,position:new TMap.LatLng(p.lat,p.lng),properties:{title:p.name}}))
   });
   markerLayer.on('click',evt=>{const g=evt.geometry;if(g&&g.properties)setStatus('📍 '+g.properties.title,'#047857');});
   const svc = travel==='walk' ? new TMap.service.Walking() : new TMap.service.Driving({policy:'LEAST_TIME'});
@@ -288,7 +330,7 @@ async function draw(){
   if(legs.length){
     lineLayer=new TMap.MultiPolyline({
       map:map,
-      styles:{road:new TMap.PolylineStyle({color:realRoute?'#2563eb':'#7c3aed',width:realRoute?6:3,borderWidth:1,borderColor:realRoute?'#1e40af':'#5b21b6',lineCap:'round',dashArray:realRoute?undefined:[4,4]})},
+      styles:{road:polyStyle(realRoute?'#2563eb':'#7c3aed',!realRoute)},
       geometries:[{id:'route',styleId:'road',paths:legs.map(p=>new TMap.LatLng(p.lat,p.lng))}]
     });
   }
@@ -370,8 +412,10 @@ function buildPlanUI(plan,days){
       '<button data-day="0" class="active" style="background:#4f46e5;color:#fff">全部</button>'+
       days.map((d,i)=>'<button data-day="'+(i+1)+'"><span class="dot" style="background:'+d.color+'"></span>第 '+d.day+' 天</button>').join('')+
     '</div>'+
-    '<div class="plan-actions"><button id="back-ai">← 回 AI 行程助手调整</button>'+
-      '<button id="re-draw">重新绘制</button></div>';
+    '<div class="plan-actions"><button id="play-tour" class="tool-btn">▶ 自动播放行程</button>'+
+      '<button id="back-ai">← 回 AI 行程助手调整</button>'+
+      '<button id="re-draw">重新绘制</button></div>'+
+    '<div class="play-progress" id="play-progress-wrap"><i id="play-bar"></i></div>';
   // 时间轴（照片：同源 iframe 直接调用父页选图函数）
   var photoOf=function(name,city,type){try{return (parent&&parent.spotPhoto)?parent.spotPhoto(name,city,type):'';}catch(e){return '';}};
   $('timeline').innerHTML=days.map((d,i)=>{
@@ -398,7 +442,8 @@ function buildPlanUI(plan,days){
     const btn=$('day-filter').querySelector('button[data-day="'+d+'"]');if(btn)btn.click();
   });
   $('back-ai').onclick=()=>{try{parent.postMessage({type:'goto-ai'},'*');}catch(e){}};
-  $('re-draw').onclick=()=>{planPoints=[];planDrawn=false;requestDraw(drawPlan);};
+  $('re-draw').onclick=()=>{stopPlay();planPoints=[];planDrawn=false;requestDraw(drawPlan);};
+  $('play-tour').onclick=togglePlay;
   $('timeline').style.display='';
   // 图例
   $('legend').innerHTML='<span style="color:#6b7280;font-weight:600">按天着色：</span>'+
@@ -450,24 +495,20 @@ function renderPlanLayers(){
   if(!shown.length){setStatus('这一天没有可显示的打卡点');return}
   const byDay={};
   shown.forEach(p=>{(byDay[p.dayIdx]=byDay[p.dayIdx]||[]).push(p);});
-  // 每天一种颜色 + 一个 marker style
-  const mStyles={};Object.keys(byDay).forEach(k=>{
-    mStyles['d'+k]=new TMap.MarkerStyle({width:26,height:36,anchor:{x:13,y:36},color:DAY_COLORS[k%DAY_COLORS.length]});
+  // 每天一种颜色；每个点一个带当日序号的独立 marker（SVG 序号水滴）
+  const mStyles={};
+  shown.forEach(p=>{
+    const c=DAY_COLORS[p.dayIdx%DAY_COLORS.length];
+    mStyles['m'+p.dayIdx+'_'+p.k]=new TMap.MarkerStyle({width:34,height:46,anchor:{x:17,y:46},src:pinSvg(p.k+1,c)});
   });
-  const geoms=shown.map(p=>({id:'m'+p.dayIdx+'_'+p.k,styleId:'d'+p.dayIdx,
+  const geoms=shown.map(p=>({id:'m'+p.dayIdx+'_'+p.k,styleId:'m'+p.dayIdx+'_'+p.k,
     position:new TMap.LatLng(p.lat,p.lng),properties:{p}}));
   markerLayer=new TMap.MultiMarker({map:map,styles:mStyles,geometries:geoms});
-  // 序号标签（部分环境不支持则静默跳过）
-  try{
-    labelLayer=new TMap.MultiLabel({map:map,
-      styles:{n:new TMap.LabelStyle({color:'#111827',size:11,offset:{x:0,y:-30}})},
-      geometries:shown.map((p,i)=>({id:'l'+p.dayIdx+'_'+p.k,styleId:'n',position:new TMap.LatLng(p.lat,p.lng),content:String(i+1)}))});
-  }catch(e){labelLayer=null;}
   // 每天一条折线
   const lStyles={},lGeoms=[];
   Object.keys(byDay).forEach(k=>{
     const arr=byDay[k];
-    lStyles['d'+k]=new TMap.PolylineStyle({color:DAY_COLORS[k%DAY_COLORS.length],width:5,borderWidth:1,borderColor:'#ffffff',lineCap:'round'});
+    lStyles['d'+k]=polyStyle(DAY_COLORS[k%DAY_COLORS.length],false);
     if(arr.length>1)lGeoms.push({id:'line'+k,styleId:'d'+k,paths:arr.map(p=>new TMap.LatLng(p.lat,p.lng))});
   });
   if(lGeoms.length)lineLayer=new TMap.MultiPolyline({map:map,styles:lStyles,geometries:lGeoms});
@@ -498,6 +539,7 @@ function renderPlanLayers(){
 }
 function receivePlan(plan){
   if(!plan||!plan.days_plan)return;
+  stopPlay();
   const uid=plan._uid||JSON.stringify([plan.city,plan.days,plan.summary,plan.estimated_cost]);
   if(uid===lastPlanUid&&mode==='plan')return;   // 同一份行程不重复地理编码
   lastPlanUid=uid;
@@ -507,9 +549,58 @@ function receivePlan(plan){
   setMode('plan');
 }
 
+/* ==================== 视角 / 行程自动播放（演示亮点） ==================== */
+function toggle3D(){
+  if(!initMap()||!map)return;
+  is3D=!is3D;
+  try{
+    if(is3D){map.setViewMode('3D');map.setPitch(52);map.setRotation(-18);}
+    else{map.setViewMode('2D');map.setPitch(0);map.setRotation(0);}
+    $('view-toggle').textContent=is3D?'◧ 2D 平面':'◩ 3D 视角';
+    $('view-toggle').style.background=is3D?'#4f46e5':'#fff';
+    $('view-toggle').style.color=is3D?'#fff':'#4f46e5';
+  }catch(e){is3D=!is3D;setStatus('当前地图不支持 3D 视角','#b45309');}
+}
+// 把某一天设为聚焦（复用筛选按钮的逻辑），并高亮时间轴卡片
+function focusDay(n){
+  activeDay=n;
+  const btn=$('day-filter')&&$('day-filter').querySelector('button[data-day="'+n+'"]');
+  if(btn)btn.click();   // click 内部会调 renderPlanLayers 并 fitBounds
+  $('timeline').querySelectorAll('.day-card').forEach(c=>c.classList.toggle('playing',n>0&&+c.dataset.day===n));
+  const card=n>0&&$('timeline').querySelector('.day-card[data-day="'+n+'"]');
+  if(card)try{card.scrollIntoView({block:'nearest',behavior:'smooth'});}catch(e){}
+}
+function stopPlay(){
+  if(playTimer){clearInterval(playTimer);playTimer=null;}
+  const b=$('play-tour');
+  if(b){b.textContent='▶ 自动播放行程';b.classList.remove('playing');b.style.background='#eef0ff';b.style.color='#4f46e5';}
+  const bar=$('play-bar');if(bar)bar.style.width='0%';
+  $('timeline').querySelectorAll('.day-card').forEach(c=>c.classList.remove('playing'));
+}
+function togglePlay(){
+  if(playTimer){stopPlay();return;}
+  if(!currentPlan||!planPoints.length){setStatus('请先生成 AI 行程并等待地图绘制完成','#b45309');return;}
+  const days=extractPlanDays(currentPlan);
+  if(!days.length)return;
+  const b=$('play-tour');b.textContent='❚❚ 停止播放';b.classList.add('playing');
+  b.style.background='linear-gradient(135deg,#5b52ea,#4f46e5)';b.style.color='#fff';
+  playIdx=0;
+  const total=days.length;
+  const step=()=>{
+    playIdx++;
+    if(playIdx>total){stopPlay();focusDay(0);setStatus('✓ 行程演示完毕','#047857');return;}
+    focusDay(playIdx);
+    const bar=$('play-bar');if(bar)bar.style.width=(playIdx/total*100)+'%';
+    setStatus('▶ 自动演示 第 '+playIdx+'/'+total+' 天','#4f46e5');
+  };
+  step();
+  playTimer=setInterval(step,2400);
+}
+
 /* ==================== 事件绑定 ==================== */
-$('tab-free').onclick=()=>setMode('free');
+$('tab-free').onclick=()=>{stopPlay();setMode('free');};
 $('tab-plan').onclick=()=>setMode('plan');
+$('view-toggle').onclick=toggle3D;
 $('draw').onclick=()=>{autoDrawn=true;initMap();draw();};
 $('preset').onclick=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');setMode('free');autoDrawn=false;requestDraw(()=>{autoDrawn=true;draw();});};
 $('city').onchange=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');autoDrawn=false;requestDraw(()=>{autoDrawn=true;draw();});};
