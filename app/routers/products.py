@@ -758,6 +758,117 @@ def search_flights(
     }
 
 
+@router.get("/flights/connecting")
+def search_connecting_flights(
+    departure_area_id: Annotated[
+        int, Query(alias="departureAreaId", description="出发城市地区 ID。")
+    ],
+    arrival_area_id: Annotated[
+        int, Query(alias="arrivalAreaId", description="最终到达城市地区 ID。")
+    ],
+    departure_date: Annotated[
+        str, Query(alias="departureDate", description="出发日期，格式 YYYY-MM-DD。")
+    ],
+    max_wait_hours: Annotated[
+        float, Query(alias="maxWaitHours", description="中转最长等待小时数，默认 48。")
+    ] = 48.0,
+    limit: Annotated[int, Query(description="最多返回中转方案数，默认 5。")] = 5,
+):
+    """联程中转搜索：出发地 →中转城市→ 目的地。
+
+    第一段取出发日期当天；第二段取中转城市飞往目的地的航班（当天及之后 2 天），
+    按「第二段起飞 - 第一段到达」在 [1, maxWaitHours] 小时内配对，按总价升序返回。
+    只用真实航班库数据，不编造航线。
+    """
+    from datetime import datetime, timedelta
+
+    def _legs(frm: int, to: int, day) -> list[dict[str, Any]]:
+        rows = fetch_all(
+            """
+            SELECT
+                d.id AS departure_id, r.flight_no, r.airline_code,
+                r.departure_area_id, r.arrival_area_id,
+                dh.hub_name AS departure_hub_name, ah.hub_name AS arrival_hub_name,
+                d.departure_time, d.arrival_time, r.duration_minutes,
+                MIN(i.sale_price_amount) AS min_sale_price_amount,
+                SUBSTRING_INDEX(GROUP_CONCAT(i.id ORDER BY i.sale_price_amount ASC, i.id ASC), ',', 1) AS min_price_inventory_id,
+                MIN(i.currency_code) AS currency_code
+            FROM flight_routes r
+            JOIN flight_departures d ON d.flight_route_id = r.id
+            JOIN flight_cabin_inventory i ON i.flight_departure_id = d.id
+            JOIN transport_hubs dh ON dh.id = r.departure_hub_id
+            JOIN transport_hubs ah ON ah.id = r.arrival_hub_id
+            WHERE r.departure_area_id = %s AND r.arrival_area_id = %s
+              AND r.status_code = 'active' AND r.departure_hub_id IS NOT NULL
+              AND DATE(d.departure_time) = %s AND d.status_code = 'scheduled'
+              AND i.status_code = 'active' AND i.available_inventory > 0
+            GROUP BY d.id ORDER BY d.departure_time ASC
+            """,
+            (frm, to, str(day)),
+        )
+        out = []
+        for row in rows:
+            out.append(
+                {
+                    "departureId": row["departure_id"],
+                    "flightNo": row["flight_no"],
+                    "airlineCode": row["airline_code"],
+                    "departureAreaId": row["departure_area_id"],
+                    "arrivalAreaId": row["arrival_area_id"],
+                    "departureHubName": row["departure_hub_name"],
+                    "arrivalHubName": row["arrival_hub_name"],
+                    "departureTime": row["departure_time"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "arrivalTime": row["arrival_time"].strftime("%Y-%m-%d %H:%M:%S"),
+                    "durationMinutes": row["duration_minutes"],
+                    "price": float(row["min_sale_price_amount"]),
+                    "minPriceInventoryId": int(row["min_price_inventory_id"])
+                    if row["min_price_inventory_id"]
+                    else None,
+                }
+            )
+        return out
+
+    try:
+        d0 = datetime.strptime(departure_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise bad_request("出发日期格式应为 YYYY-MM-DD")
+
+    # 第一段：出发地飞往所有中转城市（排除目的地本身、排除同城）
+    first_legs = fetch_all(
+        """
+        SELECT DISTINCT r.arrival_area_id AS via
+        FROM flight_routes r
+        JOIN flight_departures d ON d.flight_route_id = r.id
+        WHERE r.departure_area_id = %s AND r.arrival_area_id != %s
+          AND r.arrival_area_id != %s AND r.status_code = 'active'
+          AND DATE(d.departure_time) = %s AND d.status_code = 'scheduled'
+        """,
+        (departure_area_id, arrival_area_id, departure_area_id, str(d0)),
+    )
+    combos: list[dict[str, Any]] = []
+    for via_row in first_legs:
+        via = via_row["via"]
+        for a in _legs(departure_area_id, via, d0):
+            a_arrive = datetime.strptime(a["arrivalTime"], "%Y-%m-%d %H:%M:%S")
+            # 第二段：中转城市 → 目的地，查当天及之后 2 天
+            for dd in range(0, 3):
+                for b in _legs(via, arrival_area_id, d0 + timedelta(days=dd)):
+                    b_depart = datetime.strptime(b["departureTime"], "%Y-%m-%d %H:%M:%S")
+                    wait_h = (b_depart - a_arrive).total_seconds() / 3600
+                    if 1.0 <= wait_h <= max_wait_hours:
+                        combos.append(
+                            {
+                                "viaAreaId": via,
+                                "waitHours": round(wait_h, 1),
+                                "totalPrice": round(a["price"] + b["price"], 2),
+                                "finalArrivalTime": b["arrivalTime"],
+                                "legs": [a, b],
+                            }
+                        )
+    combos.sort(key=lambda c: (c["totalPrice"], c["waitHours"]))
+    return {"list": combos[:limit], "total": len(combos)}
+
+
 @router.get("/flights/{departureId}")
 def get_flight_detail(
     departure_id: Annotated[

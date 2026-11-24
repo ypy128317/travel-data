@@ -949,16 +949,16 @@ async function agentPlan(){
     renderAgentSteps(2);
     await sleep(350);
 
-    // 步骤3：匹配真实航班（终点=目的地，出发城市可切换；无直飞时自动换出发地，终点不变）
+    // 步骤3：匹配真实航班（直飞优先，无直飞给中转联程，终点始终是目的地）
     renderAgentSteps('doing','match');
     window.__agentFlightCtx={destId:areaId,destName:info.city,departId:2};
-    const flights=await agentMatchFlights(info.city,areaId,2);
-    window.__agentFlights=flights;
-    const fDep=flights.length?(CITYNAME(flights[0].departureAreaId)||'其他城市'):'北京';
-    const matchDetail=flights.length?('已匹配 '+flights.length+' 条 '+fDep+'→'+info.city+' 真实航班，可切换出发城市'):'已匹配平台真实酒店 / 门票商品';
+    const match=await agentMatchFlights(info.city,areaId,2);
+    window.__agentFlightMatch=match;
+    const n=match.direct.length+match.connecting.length;
+    const matchDetail=n?('已匹配 '+n+' 个 '+CITYNAME(2)+'→'+info.city+' 的航班方案（含中转联程）'):'已匹配平台真实酒店 / 门票商品';
     renderAgentSteps('doing',matchDetail);
     // 在行程结果顶部插入航班推荐卡
-    insertAgentFlights(flights,info.city);
+    insertAgentFlights(match,info.city);
     await sleep(400);
 
     // 步骤4：预算汇总
@@ -986,39 +986,79 @@ async function agentMatchFlights(city,areaId,departId){
   const date=daysFromNow(6);
   const destId=areaId||KB_AREA[city]||2;
   const from=Number(departId||2);
-  // 关键：终点始终锁定「用户目的地」，只换出发城市。
-  // 绝不展示与目的地无关的航线（如规划成都却显示北京→上海）。
-  const candidates=[from,786,20,1922,2476,1945,2802,1668,915]; // 用户出发地 + 平台主要出发城市
-  const tries=[];
-  for(const d of candidates){
-    if(Number(d)===Number(destId))continue;  // 同城跳过
-    tries.push({departureAreaId:d,arrivalAreaId:destId});
+  const result={direct:[],connecting:[],sameDep:false,date};
+  if(Number(from)===Number(destId))return result;  // 同城跳过
+
+  // ① 先查「用户出发地 → 目的地」的直飞
+  try{
+    const r=await api('/api/v1/flights/search',{params:{departureAreaId:from,arrivalAreaId:destId,departureDate:date,pageNo:1,pageSize:3}});
+    if(r.ok&&r.data?.list?.length){result.direct=r.data.list.slice(0,3);result.sameDep=true;}
+  }catch(e){}
+
+  // ② 无论直飞有没有，都查联程中转方案（给用户更多选择；无直飞时尤其重要）
+  try{
+    const r=await api('/api/v1/flights/connecting',{params:{departureAreaId:from,arrivalAreaId:destId,departureDate:date,limit:3}});
+    if(r.ok&&r.data?.list?.length)result.connecting=r.data.list.slice(0,3);
+  }catch(e){}
+
+  // ③ 没有任何方案时，退而求其次：换成其他出发城市的直飞（终点仍锁定目的地）
+  if(!result.direct.length&&!result.connecting.length){
+    const candidates=[786,20,1922,2476,1945,2802,1668,915];
+    for(const d of candidates){
+      if(Number(d)===Number(destId))continue;
+      try{
+        const r=await api('/api/v1/flights/search',{params:{departureAreaId:d,arrivalAreaId:destId,departureDate:date,pageNo:1,pageSize:3}});
+        if(r.ok&&r.data?.list?.length){result.direct=r.data.list.slice(0,3);break;}
+      }catch(e){}
+    }
   }
-  for(const t of tries){
-    try{
-      const r=await api('/api/v1/flights/search',{params:{...t,departureDate:date,pageNo:1,pageSize:3}});
-      if(r.ok&&r.data?.list?.length)return r.data.list.slice(0,3);
-    }catch(e){}
-  }
-  return [];
+  return result;
 }
-function insertAgentFlights(flights,city){
+function insertAgentFlights(match,city){
   const box=document.getElementById('ai-result');if(!box)return;
   const ctx=window.__agentFlightCtx||{destId:KB_AREA[city]||2,destName:city,departId:2};
-  const f0=flights[0]||{};
-  // 兜底后终点仍是目的地，只有出发城市可能变化
-  const shownDep=CITYNAME(f0.departureAreaId)||CITYNAME(ctx.departId)||'北京';
-  const shownArr=CITYNAME(f0.arrivalAreaId)||city;
-  const route=shownDep+' → '+shownArr;
-  const userDep=CITYNAME(ctx.departId)||'你选的城市';
-  const sameDep=Number(f0.departureAreaId)===Number(ctx.departId);
-  const tip=!flights.length
+  const direct=match.direct||[], connecting=match.connecting||[];
+  // 把所有可下单的航班段（直飞 + 中转各段）注册进查找表，供 agentBuyFlight 使用
+  const allFlights=[...direct];
+  connecting.forEach(c=>(c.legs||[]).forEach(l=>allFlights.push({...l,departureDate:l.departureTime?.slice(0,10),minSalePriceAmount:l.price,_via:c.viaAreaId,_total:c.totalPrice})));
+  window.__agentFlights=allFlights;
+
+  const userDepName=CITYNAME(ctx.departId)||'你选的城市';
+  const route=userDepName+' → '+(ctx.destName||city);
+  const hasAny=direct.length||connecting.length;
+  const tip=!hasAny
     ? '暂未匹配到飞往'+city+'的航班，可切换出发城市再试，或体验平台酒店 / 门票商品。'
-    : sameDep
-      ? '以下航班从'+shownDep+'直达你的目的地'+city+'，来自平台真实航班库（2850 条），点击可带入下单流程。'
-      : userDep+'暂无直飞'+city+'的航班，已为你匹配从'+shownDep+'出发的航班（终点仍是'+city+'）。可切换出发城市重新匹配。';
-  // 兜底命中后，把出发城市下拉框同步成实际出发城市，保证界面与航线一致
-  if(flights.length && !sameDep) ctx.departId=Number(f0.departureAreaId);
+    : direct.length&&match.sameDep
+      ? '以下航班从'+userDepName+'直达你的目的地'+city+'，来自平台真实航班库；也为你准备了中转方案可选。'
+      : '你选的'+userDepName+'暂无直飞'+city+'的航班，已为你规划经中转城市抵达的联程方案（终点仍是'+city+'）。';
+
+  const directHtml=direct.length?`<div style="margin:12px 0 4px;font-size:13px;font-weight:600;color:#0369a1">✈️ 直飞航班</div>`+
+    direct.map(f=>`<div class="item" style="padding:9px 0;border-bottom:1px solid var(--line)">
+      <div class="main"><h4>${esc(f.flightNo||'航班')} · ${esc(CITYNAME(f.departureAreaId)||'北京')} → ${esc(CITYNAME(f.arrivalAreaId)||city)}</h4>
+      <div class="sub">${esc((f.departureTime||'').slice(11,16))} 出发 · ${esc((f.arrivalTime||'').slice(11,16))} 到达 · ${esc(f.durationMinutes||'')} 分钟</div></div>
+      <div class="side"><div class="price">¥${Number(f.minSalePriceAmount||0).toFixed(0)}</div>
+      <button class="btn sm" style="margin-top:5px" onclick="agentBuyFlight(${f.departureId})">选这班 →</button></div></div>`).join(''):'';
+
+  const connHtml=connecting.length?`<div style="margin:14px 0 4px;font-size:13px;font-weight:600;color:#7c3aed">🔁 中转联程（无直飞 / 更省钱可选）</div>`+
+    connecting.map((c,idx)=>{
+      const [a,b]=c.legs||[];
+      const via=CITYNAME(c.viaAreaId)||('城市'+c.viaAreaId);
+      return `<div class="item" style="padding:11px 0;border-bottom:1px dashed var(--line);background:#faf5ff;border-radius:10px;margin-bottom:8px;padding-left:10px;padding-right:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+          <b style="color:#6d28d9;font-size:13px">${esc(CITYNAME(a?.departureAreaId)||userDepName)} → ${esc(via)} → ${esc(city)}</b>
+          <span style="font-size:12px;color:#7c3aed">中转 ${c.waitHours}h · 全程约 ${c.waitHours>0?Math.round(c.waitHours):''}h+</span>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin:6px 0">
+          <div>① ${esc(a?.flightNo||'')} · ${esc(CITYNAME(a?.departureAreaId)||'')} ${esc((a?.departureTime||'').slice(5,16))} → ${esc((a?.arrivalTime||'').slice(5,16))} · ¥${Number(a?.price||0).toFixed(0)}</div>
+          <div>② ${esc(b?.flightNo||'')} · ${esc(via)} ${esc((b?.departureTime||'').slice(5,16))} → ${esc(city)} ${esc((b?.arrivalTime||'').slice(5,16))} · ¥${Number(b?.price||0).toFixed(0)}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="price" style="color:#6d28d9">联程合计 ¥${Number(c.totalPrice||0).toFixed(0)}</span>
+          <button class="btn sm" style="background:#7c3aed;color:#fff" onclick="agentBuyConnecting(${idx})">预订此联程 →</button>
+        </div>
+      </div>`;
+    }).join(''):'';
+
   const html=`<div class="card" id="agent-flight-card" style="border-color:#bae6fd;background:linear-gradient(180deg,#f0f9ff,#fff);margin-bottom:14px">
     <h2>✈️ AI 为你匹配的真实航班 <span class="api-tag" id="agent-route-tag">${esc(route)}</span></h2>
     <div class="agent-flight-bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 4px">
@@ -1030,18 +1070,10 @@ function insertAgentFlights(flights,city){
       <button class="btn sm" id="btn-agent-flight-refresh" style="margin-left:auto" onclick="refreshAgentFlights()">重新匹配</button>
     </div>
     <div class="desc" id="agent-flight-tip">${esc(tip)}</div>
-    <div id="agent-flight-list">
-    ${flights.map(f=>`<div class="item" style="padding:9px 0;border-bottom:1px solid var(--line)">
-      <div class="main"><h4>${esc(f.flightNo||'航班')} · ${esc(CITYNAME(f.departureAreaId)||'北京')} → ${esc(CITYNAME(f.arrivalAreaId)||city)}</h4>
-      <div class="sub">${esc(f.departureTime||'')} 出发 · ${esc(f.arrivalTime||'')} 到达 · ${esc(f.durationMinutes||'')} 分钟</div></div>
-      <div class="side"><div class="price">¥${Number(f.minSalePriceAmount||0).toFixed(0)}</div>
-      <button class="btn sm" style="margin-top:5px" onclick="agentBuyFlight(${f.departureId})">选这班 →</button></div></div>`).join('')}
-    </div>
+    <div id="agent-flight-list">${directHtml}${connHtml||(!direct.length?'<div class="desc" style="color:#b45309">暂无合适航线，试试切换出发城市。</div>':'')}</div>
   </div>`;
-  // 已存在则整卡替换，避免重复插入
   const old=document.getElementById('agent-flight-card');
   if(old){old.outerHTML=html;}else{box.insertAdjacentHTML('afterbegin',html);}
-  // 监听出发城市切换：自动重新匹配
   const combo=document.querySelector('#agent-flight-card .combo[data-city]');
   if(combo){
     combo.addEventListener('citychange',ev=>{
@@ -1050,6 +1082,15 @@ function insertAgentFlights(flights,city){
     });
   }
 }
+/* 预订联程：依次把两段航班带入收银台（第一段下单后提示继续第二段） */
+async function agentBuyConnecting(idx){
+  const combo=(window.__agentFlightMatch?.connecting||[])[idx];
+  if(!combo||!combo.legs?.length){toast('联程信息已过期，请重新匹配');return;}
+  const first=combo.legs[0];
+  toast('联程需分段出票，先带你预订第一段：'+first.flightNo+'（'+CITYNAME(first.departureAreaId)+'→'+CITYNAME(first.arrivalAreaId)+'）');
+  window.__agentConnectingQueue=combo.legs.slice(1); // 剩余段暂存，支付后可提示继续
+  agentBuyFlight(first.departureId);
+}
 /* 切换出发城市后重新匹配航班 */
 async function refreshAgentFlights(){
   const ctx=window.__agentFlightCtx;if(!ctx)return;
@@ -1057,12 +1098,11 @@ async function refreshAgentFlights(){
   if(btn){btn.disabled=true;btn.textContent='匹配中…';}
   const tip=document.getElementById('agent-flight-tip');
   if(tip)tip.textContent='正在为你重新匹配 '+CITYNAME(ctx.departId)+' → '+ctx.destName+' 的真实航班…';
-  const flights=await agentMatchFlights(ctx.destName,ctx.destId,ctx.departId);
-  window.__agentFlights=flights;
-  insertAgentFlights(flights,ctx.destName);
-  const f0=flights[0]||{};
-  const actualDep=CITYNAME(f0.departureAreaId)||CITYNAME(ctx.departId)||'其他城市';
-  toast(flights.length?('已匹配 '+actualDep+' → '+ctx.destName+' 的 '+flights.length+' 条航班'):('暂无飞往'+ctx.destName+'的航班，可换出发城市再试'));
+  const match=await agentMatchFlights(ctx.destName,ctx.destId,ctx.departId);
+  window.__agentFlightMatch=match;
+  insertAgentFlights(match,ctx.destName);
+  const n=match.direct.length+match.connecting.length;
+  toast(n?('已匹配 '+CITYNAME(ctx.departId)+' → '+ctx.destName+' 的 '+n+' 个航班方案'):('暂无飞往'+ctx.destName+'的航班，可换出发城市再试'));
 }
 async function agentBuyFlight(depId){
   const f=(window.__agentFlights||[]).find(x=>x.departureId===depId);if(!f)return;
