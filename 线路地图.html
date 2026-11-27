@@ -48,18 +48,16 @@
   shim('localStorage'); shim('sessionStorage');
 })();
 </script>
-<!-- 合规：零 Key 代理模式，密钥由 WorkBuddy 运行时注入，前端不暴露任何 Key -->
+<!-- 高德 JS API 2.0：Key 与安全密钥由 WorkBuddy 运行时注入，前端源码不写死真实值 -->
 <script type="text/javascript">
-  window._TMapSecurityConfig = {
-    serviceHost: 'http://127.0.0.1:__WB_HTTP_PORT__/_TMapService/_wbt/__WB_TMAP_SECRET__',
-  };
+  window._AMapSecurityConfig = { securityJsCode: "__WB_AMAP_SECRET__" };
 </script>
-<script src="https://map.qq.com/api/gljs?v=1.exp&libraries=service"></script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__WB_AMAP_KEY__&plugin=AMap.Scale,AMap.Geocoder,AMap.Driving,AMap.Walking"></script>
 </head>
 <body>
 <header>
   <h1>🗺️ 云游旅行 · 线路地图</h1>
-  <p>景点实时地理编码打点 + 驾车/步行路线连线 · 腾讯地图（GCJ-02）· 密钥由运行环境安全注入</p>
+  <p>景点实时地理编码打点 + 驾车/步行路线连线 · 高德地图（GCJ-02）· 密钥由运行环境安全注入</p>
 </header>
 <div class="wrap">
   <div class="card">
@@ -80,7 +78,7 @@
       <button class="btn-ghost" id="preset">加载该城市景点</button>
       <span class="status" id="status"></span>
     </div>
-    <div class="legend">提示：景点名按腾讯地图地理编码解析（如“亚龙湾”“故宫博物院”），越具体越准。可手动改成任意景点。</div>
+    <div class="legend">提示：景点名按高德地图地理编码解析（如“亚龙湾”“故宫博物院”），越具体越准。可手动改成任意景点。</div>
   </div>
   <div class="card" style="padding:6px"><div id="map"></div></div>
   <div class="card" id="info" style="display:none"></div>
@@ -95,6 +93,7 @@ const PRESETS={
   '杭州':['西湖','灵隐寺','龙井村','河坊街','西溪湿地','雷峰塔']
 };
 // 内置景点坐标（GCJ-02，公开旅游景点位置，非个人数据），用于 service REST 不可用时的兜底
+// 高德坐标顺序为 [经度, 纬度]，这些值存的是 [纬度, 经度]，用 LL() 统一转换
 const COORDS={
   '三亚':{'亚龙湾':[18.2149,109.6393],'蜈支洲岛':[18.3077,109.7592],'天涯海角':[18.2470,109.3510],'南山文化旅游区':[18.3010,109.2010],'海棠湾':[18.3000,109.7200],'鹿回头':[18.2200,109.5100],'西岛':[18.2300,109.3700]},
   '云南':{'大理古城':[25.6060,100.1550],'洱海':[25.7500,100.1700],'丽江古城':[26.8720,100.2340],'玉龙雪山':[27.1040,100.1760],'石林':[24.8140,103.3300],'滇池':[25.0400,102.7000],'泸沽湖':[27.7000,100.7700]},
@@ -104,15 +103,46 @@ const COORDS={
   '杭州':{'西湖':[30.2430,120.1490],'灵隐寺':[30.2400,120.1000],'龙井村':[30.2200,120.1000],'河坊街':[30.2400,120.1700],'西溪湿地':[30.2700,120.0600],'雷峰塔':[30.2310,120.1480]}
 };
 const $=id=>document.getElementById(id);
+const LL=(lat,lng)=>new AMap.LngLat(lng,lat);
+const pair=p=>[p.lng,p.lat];
 let map=null, markerLayer=null, lineLayer=null;
 
 function initMap(){
   if(map)return true;
-  if(!window.TMap){$('status').textContent='地图组件加载中…';return false;}
+  if(!window.AMap){$('status').textContent='地图组件加载中…';return false;}
   try{
-    map=new TMap.Map('map',{zoom:11,center:new TMap.LatLng(30.25,120.15)});
+    map=new AMap.Map('map',{zoom:11,center:[120.15,30.25]});
+    try{map.addControl(new AMap.Scale({position:'LB'}));}catch(e){}
     return true;
   }catch(e){$('status').textContent='地图初始化失败：'+(e.message||e);return false;}
+}
+// 高德服务类 API 为回调式，包装成 Promise
+function geocode(address,city){
+  return new Promise(resolve=>{
+    try{
+      const gc=new AMap.Geocoder(city?{city:city}:{});
+      gc.getLocation(address,(status,result)=>{
+        if(status==='complete'&&result&&result.geocodes&&result.geocodes.length){
+          const loc=result.geocodes[0].location;
+          resolve({lat:loc.lat,lng:loc.lng});
+        }else resolve(null);
+      });
+    }catch(e){resolve(null);}
+  });
+}
+function fetchRoute(from,to,mode){
+  return new Promise(resolve=>{
+    try{
+      const svc=mode==='walk'?new AMap.Walking({}):new AMap.Driving({policy:AMap.DrivingPolicy.LEAST_TIME});
+      svc.get(pair(from),pair(to),(status,result)=>{
+        if(status==='complete'&&result&&result.routes&&result.routes[0]){
+          const path=[];
+          (result.routes[0].steps||[]).forEach(s=>{(s.path||[]).forEach(p=>path.push({lat:p.lat,lng:p.lng}));});
+          resolve(path.length?path:null);
+        }else resolve(null);
+      });
+    }catch(e){resolve(null);}
+  });
 }
 
 function parseHash(){
@@ -132,64 +162,50 @@ async function draw(){
   if(!names.length){$('status').textContent='请填写至少一个景点';return}
   const city=$('city').value, mode=$('mode').value;
   $('status').innerHTML='<span class="spin"></span> 正在定位 '+names.length+' 个景点…';
-  const geocoder=new TMap.service.Geocoder();
   const pts=[]; const misses=[]; let builtin=0, geo=0;
   for(const name of names){
     // 1) 内置坐标优先（内置景点一定能出图）
     const c=COORDS[city]&&COORDS[city][name];
     if(c){pts.push({name,lat:c[0],lng:c[1]});builtin++;continue;}
     // 2) 自定义景点：尝试实时地理编码
-    try{
-      const r=await geocoder.getLocation({address:city+name});
-      const loc=r.result&&r.result.location;
-      if(loc){pts.push({name,lat:loc.lat,lng:loc.lng});geo++;}
-      else misses.push(name);
-    }catch(e){misses.push(name);}
+    const loc=await geocode(name,city);
+    if(loc){pts.push({name,lat:loc.lat,lng:loc.lng});geo++;}
+    else misses.push(name);
   }
   if(!pts.length){$('status').textContent='未定位到任何景点，试试内置的 6 城市景点或更具体的名称';return}
   // 清理旧图层
-  if(markerLayer){markerLayer.setMap(null);markerLayer=null;}
-  if(lineLayer){lineLayer.setMap(null);lineLayer=null;}
-  // 打点
-  markerLayer=new TMap.MultiMarker({
-    map:map,
-    styles:{pin:new TMap.MarkerStyle({width:26,height:36,anchor:{x:13,y:36},color:'#e11d48'})},
-    geometries:pts.map((p,i)=>({
-      id:'p'+i, styleId:'pin', position:new TMap.LatLng(p.lat,p.lng),
-      properties:{title:p.name}
-    }))
+  if(markerLayer){try{map.remove(markerLayer);}catch(e){}markerLayer=null;}
+  if(lineLayer){try{map.remove(lineLayer);}catch(e){}lineLayer=null;}
+  // 打点（默认水滴图标）
+  markerLayer=pts.map(p=>{
+    const m=new AMap.Marker({position:pair(p),title:p.name});
+    m.on('click',()=>$('status').textContent='📍 '+p.name);
+    return m;
   });
-  // 标签
-  markerLayer.on('click',evt=>{
-    const g=evt.geometry; if(g&&g.properties)$('status').textContent='📍 '+g.properties.title;
-  });
+  map.add(markerLayer);
   // 连线：优先实时路径规划，失败则用直线兜底，保证一定有线路
-  const svc = mode==='walk' ? new TMap.service.Walking() : new TMap.service.Driving({policy:'LEAST_TIME'});
   let legs=[]; let realRoute=0;
   for(let i=0;i<pts.length-1;i++){
-    let seg=[];
-    try{
-      const r=await svc.getDirection({
-        from:new TMap.LatLng(pts[i].lat,pts[i].lng),
-        to:new TMap.LatLng(pts[i+1].lat,pts[i+1].lng)
-      });
-      const route=r.result&&r.result.routes&&r.result.routes[0];
-      if(route&&route.polyline&&route.polyline.length)seg=route.polyline;
-    }catch(e){}
-    if(seg.length){legs=legs.concat(seg);realRoute++;}
+    const seg=await fetchRoute(pts[i],pts[i+1],mode);
+    if(seg&&seg.length){legs=legs.concat(seg);realRoute++;}
     else legs.push({lat:pts[i].lat,lng:pts[i].lng},{lat:pts[i+1].lat,lng:pts[i+1].lng});
   }
   if(legs.length){
-    lineLayer=new TMap.MultiPolyline({
-      map:map,
-      styles:{road:new TMap.PolylineStyle({color:realRoute?'#2563eb':'#7c3aed',width:realRoute?6:3,borderWidth:1,borderColor:realRoute?'#1e40af':'#5b21b6',lineCap:'round',dashArray:realRoute?undefined:[4,4]})},
-      geometries:[{id:'route',styleId:'road',paths:legs.map(p=>new TMap.LatLng(p.lat,p.lng))}]
+    lineLayer=new AMap.Polyline({
+      path:legs.map(pair),
+      strokeColor:realRoute?'#2563eb':'#7c3aed',
+      strokeWeight:realRoute?6:3,
+      borderWeight:1,
+      borderColor:realRoute?'#1e40af':'#5b21b6',
+      lineCap:'round',
+      strokeStyle:realRoute?'solid':'dashed'
     });
+    map.add(lineLayer);
   }
   // 视野居中
   const lats=pts.map(p=>p.lat),lngs=pts.map(p=>p.lng);
-  map.setCenter(new TMap.LatLng((Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,
-                                (Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2));
+  map.setCenter(LL((Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,
+                   (Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2));
   if(pts.length>1)map.setZoom(12);
   $('status').style.color='#047857';
   $('status').textContent='已绘制 '+pts.length+' 个景点（内置坐标 '+builtin+(geo?' / 实时定位 '+geo:'')+'）'+

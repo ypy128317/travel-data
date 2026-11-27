@@ -56,7 +56,8 @@ services:
       DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
       DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
       MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
-      TMAP_KEY: "${TMAP_KEY:-}"
+      AMAP_KEY: "${AMAP_KEY:-}"
+      AMAP_SECURITY_CODE: "${AMAP_SECURITY_CODE:-}"
     command: sh -c "python -m generate.main --profile smoke || true"
     profiles:
       - seed
@@ -81,7 +82,8 @@ services:
       DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
       DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
       MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
-      TMAP_KEY: "${TMAP_KEY:-}"
+      AMAP_KEY: "${AMAP_KEY:-}"
+      AMAP_SECURITY_CODE: "${AMAP_SECURITY_CODE:-}"
       TZ: Asia/Shanghai
     ports:
       - "80:8000"

@@ -1,6 +1,6 @@
 # ============ 旅游数据平台 本地/线上通用部署 ============
 # 用法：
-#   1) 确认 .env 里 DASHSCOPE_API_KEY、TMAP_KEY 已填（AI 和地图要用）
+#   1) 确认 .env 里 DASHSCOPE_API_KEY、AMAP_KEY、AMAP_SECURITY_CODE 已填（AI 和地图要用）
 #   2) docker compose up -d --build
 #   3) 浏览器访问 http://<服务器IP>:8000/
 #
@@ -51,7 +51,8 @@ services:
       DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
       DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
       MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
-      TMAP_KEY: "${TMAP_KEY:-}"
+      AMAP_KEY: "${AMAP_KEY:-}"
+      AMAP_SECURITY_CODE: "${AMAP_SECURITY_CODE:-}"
     # profile=smoke 生成小规模数据（演示足够、快）；改成 full 生成全量
     command: sh -c "python -m generate.main --profile smoke || true"
     profiles:
@@ -75,7 +76,8 @@ services:
       DASHSCOPE_API_KEY: "${DASHSCOPE_API_KEY:-}"
       DASHSCOPE_BASE_URL: "${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
       MODEL_NAME: "${MODEL_NAME:-qwen-flash}"
-      TMAP_KEY: "${TMAP_KEY:-}"
+      AMAP_KEY: "${AMAP_KEY:-}"
+      AMAP_SECURITY_CODE: "${AMAP_SECURITY_CODE:-}"
     ports:
       - "8000:8000"
 

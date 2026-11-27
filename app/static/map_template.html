@@ -126,13 +126,16 @@
   shim('localStorage'); shim('sessionStorage');
 })();
 </script>
-<!-- Key 由后端从 .env 读取后注入，前端源码不写入任何真实 Key -->
-<script src="https://map.qq.com/api/gljs?v=1.exp&libraries=service&key=__TMAP_KEY__"></script>
+<!-- 高德 JS API 2.0 强制要求安全密钥：必须在使用前设置；Key 与安全密钥均由后端从 .env 注入，前端源码不写入真实值 -->
+<script type="text/javascript">
+  window._AMapSecurityConfig = { securityJsCode: "__AMAP_SECURITY_CODE__" };
+</script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.Scale,AMap.ControlBar,AMap.Geocoder,AMap.Driving,AMap.Walking"></script>
 </head>
 <body>
 <header>
   <h1>云游旅行 · 线路地图</h1>
-  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 腾讯地图（GCJ-02）· Key 由后端安全注入</p>
+  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
 </header>
 <div class="wrap">
   <div class="card modebar">
@@ -163,7 +166,7 @@
       <button class="btn btn-main" id="draw">绘制线路</button>
       <button class="btn btn-ghost" id="preset">加载该城市景点</button>
     </div>
-    <div class="legend" id="free-legend">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走腾讯地图实时地理编码，越具体越准。</div>
+    <div class="legend" id="free-legend">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走高德地图实时地理编码，越具体越准。</div>
   </div>
 
   <!-- AI 行程控件 -->
@@ -193,6 +196,7 @@ const PRESETS={
   '成都':['成都大熊猫繁育研究基地','宽窄巷子','武侯祠','锦里','春熙路','都江堰'],
   '杭州':['西湖','灵隐寺','龙井村','河坊街','西溪湿地','雷峰塔']
 };
+// 坐标为 GCJ-02，高德与腾讯共用同一坐标系，值可直接复用；存储顺序为 [纬度, 经度]
 const COORDS={
   '三亚':{'亚龙湾':[18.2149,109.6393],'蜈支洲岛':[18.3077,109.7592],'天涯海角':[18.2470,109.3510],'南山文化旅游区':[18.3010,109.2010],'海棠湾':[18.3000,109.7200],'鹿回头':[18.2200,109.5100],'西岛':[18.2300,109.3700]},
   '云南':{'大理古城':[25.6060,100.1550],'洱海':[25.7500,100.1700],'丽江古城':[26.8720,100.2340],'玉龙雪山':[27.1040,100.1760],'石林':[24.8140,103.3300],'滇池':[25.0400,102.7000],'泸沽湖':[27.7000,100.7700]},
@@ -205,7 +209,11 @@ const DAY_COLORS=['#e11d48','#2563eb','#059669','#d97706','#7c3aed','#0891b2','#
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-/* ===== 精致序号 Marker：SVG data URI，腾讯地图 MarkerStyle.src 原生支持 ===== */
+/* 高德坐标顺序是 [经度, 纬度]，与腾讯 LatLng(纬,经) 相反：统一在这里转换 */
+const LL=(lat,lng)=>new AMap.LngLat(lng,lat);
+const pair=p=>[p.lng,p.lat];
+
+/* ===== 精致序号 Marker：SVG data URI 作为高德 Marker 的 content ===== */
 function pinSvg(num,color){
   const svg='<svg xmlns="http://www.w3.org/2000/svg" width="34" height="46" viewBox="0 0 34 46">'+
     '<defs><filter id="s" x="-60%" y="-60%" width="220%" height="220%">'+
@@ -217,38 +225,49 @@ function pinSvg(num,color){
     'font-weight="700" fill="'+color+'">'+num+'</text></svg>';
   return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
 }
-/* 折线：实线带行进方向箭头，虚线用于「直线兜底」 */
+function pinMarker(num,color,p,name){
+  const m=new AMap.Marker({
+    position: pair(p),
+    content:'<img src="'+pinSvg(num,color)+'" alt="" style="width:34px;height:46px;display:block">',
+    offset:new AMap.Pixel(-17,-46),
+    title:name||''
+  });
+  return m;
+}
+/* 折线配置：实线带箭头，虚线用于「直线兜底」 */
 function polyStyle(color,dashed){
-  const o={color:color,width:dashed?3:5,borderWidth:1,borderColor:'#fff',lineCap:'round'};
-  if(dashed){o.dashArray=[5,5];}
-  else{o.showArrow=true;o.arrowOptions={space:60,width:5,height:8};}
-  return new TMap.PolylineStyle(o);
+  const o={strokeColor:color,strokeWeight:dashed?3:5,borderWeight:1,borderColor:'#fff',lineCap:'round'};
+  if(dashed){o.strokeStyle='dashed';}
+  else{o.showArrow=true;}
+  return o;
 }
 
-let map=null, markerLayer=null, lineLayer=null, labelLayer=null, infoWin=null;
+let map=null, markerLayer=null, lineLayer=null, infoWin=null;
 let autoDrawn=false, pendingAction=null;
 let is3D=false, playTimer=null, playDays=[], playIdx=0;
 let mode='free', currentPlan=null, planPoints=[], planDrawn=false, activeDay=0, lastPlanUid='';
 
 function initMap(){
   if(map)return true;
-  if(!window.TMap){$('status').textContent='地图组件加载中…';return false;}
+  if(!window.AMap){$('status').textContent='地图组件加载中…';return false;}
   const box=$('map');
-  // 容器宽高为 0（面板 display:none）时不要建图，否则腾讯地图会抛 far <= 0
+  // 容器宽高为 0（面板 display:none）时不要建图，否则高德地图尺寸异常
   if(!box||box.clientWidth<10||box.clientHeight<10)return false;
   try{
-    map=new TMap.Map('map',{zoom:11,center:new TMap.LatLng(30.25,120.15),viewMode:'2D'});
+    map=new AMap.Map('map',{zoom:11,center:[120.15,30.25],viewMode:'2D'});
     // 专业地图控件：缩放 + 比例尺
-    try{map.addControl(new TMap.control.Zoom({position:'bottom-right'}));}catch(e){}
-    try{map.addControl(new TMap.control.Scale({position:'bottom-left'}));}catch(e){}
+    try{map.addControl(new AMap.ControlBar({position:{right:'14px',bottom:'48px'}}));}catch(e){}
+    try{map.addControl(new AMap.Scale({position:'LB'}));}catch(e){}
     $('status').textContent='';
     return true;
   }catch(e){$('status').textContent='地图初始化失败：'+(e.message||e);return false;}
 }
+// 容器可见性变化后触发布局刷新（高德没有 resize()，用 setZoom 触发重绘兜底）
+function mapResize(){try{if(typeof map.resize==='function'){map.resize();}else{map.setZoom(map.getZoom());}}catch(e){}}
 // 建图可能要等容器可见，未就绪时把动作挂起，由 ResizeObserver 补执行
 function requestDraw(action){
   if(initMap()){
-    try{map.resize();}catch(e){}
+    mapResize();
     setTimeout(action,60);
   }else pendingAction=action;
 }
@@ -262,10 +281,40 @@ function parseHash(){
   return true;
 }
 function clearLayers(){
-  [markerLayer,lineLayer,labelLayer].forEach(L=>{if(L){try{L.setMap(null);}catch(e){}}});
-  markerLayer=lineLayer=labelLayer=null;
+  [markerLayer,lineLayer].forEach(L=>{if(L){try{map.remove(L);}catch(e){}}});
+  markerLayer=lineLayer=null;
+  if(infoWin){try{infoWin.close();}catch(e){}}
 }
 function setStatus(txt,color){const s=$('status');s.textContent=txt||'';s.style.color=color||'#b45309';}
+
+/* ===== 高德服务类 API 是回调式，包装成 Promise 复用原有 async 流程 ===== */
+function geocode(address,city){
+  return new Promise(resolve=>{
+    try{
+      const gc=new AMap.Geocoder(city?{city:city}:{});
+      gc.getLocation(address,(status,result)=>{
+        if(status==='complete'&&result&&result.geocodes&&result.geocodes.length){
+          const loc=result.geocodes[0].location;
+          resolve({lat:loc.lat,lng:loc.lng});
+        }else resolve(null);
+      });
+    }catch(e){resolve(null);}
+  });
+}
+function fetchRoute(from,to,travel){
+  return new Promise(resolve=>{
+    try{
+      const svc=travel==='walk'?new AMap.Walking({}):new AMap.Driving({policy:AMap.DrivingPolicy.LEAST_TIME});
+      svc.get(pair(from),pair(to),(status,result)=>{
+        if(status==='complete'&&result&&result.routes&&result.routes[0]){
+          const path=[];
+          (result.routes[0].steps||[]).forEach(s=>{(s.path||[]).forEach(p=>path.push({lat:p.lat,lng:p.lng}));});
+          resolve(path.length?path:null);
+        }else resolve(null);
+      });
+    }catch(e){resolve(null);}
+  });
+}
 
 /* ==================== 模式切换 ==================== */
 function setMode(m){
@@ -276,12 +325,12 @@ function setMode(m){
   $('plan-controls').style.display=m==='plan'?'':'none';
   $('timeline').style.display=m==='plan'&&currentPlan?'':'none';
   if(m==='free'){
-    $('legend').innerHTML='<span style="color:#9ca3af">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走腾讯地图实时地理编码。</span>';
+    $('legend').innerHTML='<span style="color:#9ca3af">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走高德地图实时地理编码。</span>';
     if(!autoDrawn)requestDraw(()=>{autoDrawn=true;draw();});
-    else requestDraw(()=>{try{map.resize();}catch(e){}});
+    else requestDraw(mapResize);
   }else{
     if(currentPlan&&!planDrawn)requestDraw(drawPlan);
-    else requestDraw(()=>{try{map.resize();}catch(e){}});
+    else requestDraw(mapResize);
   }
 }
 
@@ -293,46 +342,33 @@ async function draw(){
   const city=$('city').value, travel=$('mode').value;
   setStatus('');
   $('status').innerHTML='<span class="spin"></span> 正在定位 '+names.length+' 个景点…';
-  const geocoder=new TMap.service.Geocoder();
   const pts=[]; const misses=[]; let builtin=0, geo=0;
   for(const name of names){
     const c=COORDS[city]&&COORDS[city][name];
     if(c){pts.push({name,lat:c[0],lng:c[1]});builtin++;continue;}
-    try{
-      const r=await geocoder.getLocation({address:city+name});
-      const loc=r.result&&r.result.location;
-      if(loc){pts.push({name,lat:loc.lat,lng:loc.lng});geo++;}
-      else misses.push(name);
-    }catch(e){misses.push(name);}
+    const loc=await geocode(name,city);
+    if(loc){pts.push({name,lat:loc.lat,lng:loc.lng});geo++;}
+    else misses.push(name);
   }
   if(!pts.length){setStatus('未定位到任何景点，试试内置 6 城市景点或更具体的名称');return}
   clearLayers();
-  const fStyles={};
-  pts.forEach((p,i)=>{fStyles['p'+i]=new TMap.MarkerStyle({width:34,height:46,anchor:{x:17,y:46},src:pinSvg(i+1,'#e11d48')});});
-  markerLayer=new TMap.MultiMarker({
-    map:map,
-    styles:fStyles,
-    geometries:pts.map((p,i)=>({id:'p'+i,styleId:'p'+i,position:new TMap.LatLng(p.lat,p.lng),properties:{title:p.name}}))
+  const markers=pts.map((p,i)=>{
+    const m=pinMarker(i+1,'#e11d48',p,p.name);
+    m.on('click',()=>setStatus('📍 '+p.name,'#047857'));
+    return m;
   });
-  markerLayer.on('click',evt=>{const g=evt.geometry;if(g&&g.properties)setStatus('📍 '+g.properties.title,'#047857');});
-  const svc = travel==='walk' ? new TMap.service.Walking() : new TMap.service.Driving({policy:'LEAST_TIME'});
+  map.add(markers);
+  markerLayer=markers;
+  const svcTravel=travel;
   let legs=[]; let realRoute=0;
   for(let i=0;i<pts.length-1;i++){
-    let seg=[];
-    try{
-      const r=await svc.getDirection({from:new TMap.LatLng(pts[i].lat,pts[i].lng),to:new TMap.LatLng(pts[i+1].lat,pts[i+1].lng)});
-      const route=r.result&&r.result.routes&&r.result.routes[0];
-      if(route&&route.polyline&&route.polyline.length)seg=route.polyline;
-    }catch(e){}
-    if(seg.length){legs=legs.concat(seg);realRoute++;}
+    const seg=await fetchRoute(pts[i],pts[i+1],svcTravel);
+    if(seg&&seg.length){legs=legs.concat(seg);realRoute++;}
     else legs.push({lat:pts[i].lat,lng:pts[i].lng},{lat:pts[i+1].lat,lng:pts[i+1].lng});
   }
   if(legs.length){
-    lineLayer=new TMap.MultiPolyline({
-      map:map,
-      styles:{road:polyStyle(realRoute?'#2563eb':'#7c3aed',!realRoute)},
-      geometries:[{id:'route',styleId:'road',paths:legs.map(p=>new TMap.LatLng(p.lat,p.lng))}]
-    });
+    lineLayer=new AMap.Polyline(Object.assign({path:legs.map(pair)},polyStyle(realRoute?'#2563eb':'#7c3aed',!realRoute)));
+    map.add(lineLayer);
   }
   fitPoints(pts);
   setStatus('已绘制 '+pts.length+' 个景点（内置坐标 '+builtin+(geo?' / 实时定位 '+geo:'')+'）'+
@@ -340,18 +376,21 @@ async function draw(){
   const info=$('info');
   info.style.display='block';
   info.innerHTML='<h2 style="margin-top:0">📍 本次线路（按顺序）</h2><div class="spots-list">'+
-    pts.map((p,i)=>'<span class="tag">'+(i+1)+'. '+esc(p.name)+'</span>').join('')+'</div>'+
+    pts.map((p,i)=>'<span class="tag">'+(i+1)+'. '+esc(p.name)+'</span>').join('')+
     (misses.length?'<div class="legend">未定位：'+esc(misses.join('、'))+'</div>':'');
 }
 function fitPoints(pts){
   if(!pts.length)return;
   try{
-    const b=new TMap.LatLngBounds();
-    pts.forEach(p=>b.extend(new TMap.LatLng(p.lat,p.lng)));
-    map.fitBounds(b,{padding:70});
+    const lngs=pts.map(p=>p.lng),lats=pts.map(p=>p.lat);
+    const b=new AMap.Bounds(
+      LL(Math.min.apply(null,lats),Math.min.apply(null,lngs)),
+      LL(Math.max.apply(null,lats),Math.max.apply(null,lngs))
+    );
+    map.setBounds(b,false,[70,70,70,70]);
   }catch(e){
     const lats=pts.map(p=>p.lat),lngs=pts.map(p=>p.lng);
-    map.setCenter(new TMap.LatLng((Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,(Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2));
+    map.setCenter(LL((Math.min.apply(null,lats)+Math.max.apply(null,lats))/2,(Math.min.apply(null,lngs)+Math.max.apply(null,lngs))/2));
     if(pts.length>1)map.setZoom(12);
   }
 }
@@ -460,7 +499,6 @@ async function drawPlan(){
   if(!planPoints.length){
     setStatus('');$('status').innerHTML='<span class="spin"></span> 正在定位行程中的打卡点…';
     const city=(currentPlan.city||'').replace(/[市省]$/,'');
-    const geocoder=new TMap.service.Geocoder();
     for(let i=0;i<days.length;i++){
       for(let k=0;k<days[i].names.length;k++){
         const name=days[i].names[k];
@@ -468,11 +506,8 @@ async function drawPlan(){
         let pos=null;
         if(c)pos={lat:c[0],lng:c[1]};
         else{
-          try{
-            const r=await geocoder.getLocation({address:name,region:city||undefined});
-            const loc=r.result&&r.result.location;
-            if(loc)pos={lat:loc.lat,lng:loc.lng};
-          }catch(e){}
+          const loc=await geocode(name,city||undefined);
+          if(loc)pos={lat:loc.lat,lng:loc.lng};
         }
         if(pos)planPoints.push({dayIdx:i,k,name,lat:pos.lat,lng:pos.lng,color:days[i].color,title:days[i].title,day:days[i].day,
           fromText:(days[i].textNames||[]).indexOf(name)>=0});
@@ -485,8 +520,29 @@ async function drawPlan(){
   setStatus('已按 '+days.length+' 天着色绘制 '+planPoints.length+' 个打卡点 · 点击圆点看详情','#047857');
   $('info').style.display='block';
   $('info').innerHTML='<h2 style="margin-top:0">📋 行程打卡点</h2><div class="spots-list">'+
-    planPoints.map((p,i)=>'<span class="tag" style="border-color:'+p.color+'33;color:'+p.color+'">D'+p.day+' · '+esc(p.name)+'</span>').join('')+'</div>'+
+    planPoints.map((p,i)=>'<span class="tag" style="border-color:'+p.color+'33;color:'+p.color+'">D'+p.day+' · '+esc(p.name)+'</span>').join('')+
     (currentPlan.references&&currentPlan.references.length?'<div class="legend">📚 引用攻略：'+currentPlan.references.map(x=>esc(x)).join('、')+'</div>':'');
+}
+function showMarkerInfo(p){
+  if(!p)return;
+  const d=extractPlanDays(currentPlan)[p.dayIdx]||{};
+  const recs=(d.recommendations||[]).filter(x=>x&&x.name);
+  let slot='', hint='';
+  if(p.fromText){
+    slot=p.k===0?(d.morning||d.afternoon||''):(p.k===1?(d.afternoon||d.evening||''):(d.evening||''));
+  }else{
+    hint='<div class="iw-s" style="color:#9ca3af">建议打卡点（当天行程未点名具体景点）</div>';
+  }
+  var pphoto='';try{if(parent&&parent.spotPhoto)pphoto=parent.spotPhoto(p.name,(currentPlan&&currentPlan.city)||'','scenic')||'';}catch(e){}
+  const html='<div class="iw">'+(pphoto?'<img class="iw-img" src="'+pphoto+'" alt="">':'')+'<div class="iw-t">'+esc(p.name)+'</div>'+
+    '<div class="iw-d">第 '+p.day+' 天 · '+esc(p.title)+'</div>'+
+    (slot?'<div class="iw-s">'+esc(slot)+'</div>':hint)+
+    (p.fromText&&recs.length?'<div class="iw-p">🛒 '+recs.slice(0,2).map(x=>esc(x.name)+(x.price!=null?' ¥'+Number(x.price).toFixed(0):'')).join(' · ')+'</div>':'')+'</div>';
+  try{
+    if(!infoWin)infoWin=new AMap.InfoWindow({content:'',offset:new AMap.Pixel(0,-34)});
+    infoWin.setContent(html);
+    infoWin.open(map,LL(p.lat,p.lng));
+  }catch(e){setStatus('📍 第'+p.day+'天 · '+p.name+(slot?' — '+slot:''),'#047857');}
 }
 function renderPlanLayers(){
   if(!initMap())return;
@@ -495,46 +551,22 @@ function renderPlanLayers(){
   if(!shown.length){setStatus('这一天没有可显示的打卡点');return}
   const byDay={};
   shown.forEach(p=>{(byDay[p.dayIdx]=byDay[p.dayIdx]||[]).push(p);});
-  // 每天一种颜色；每个点一个带当日序号的独立 marker（SVG 序号水滴）
-  const mStyles={};
-  shown.forEach(p=>{
+  // 每个点一个带当日序号的独立 marker（SVG 序号水滴）
+  const markers=shown.map(p=>{
     const c=DAY_COLORS[p.dayIdx%DAY_COLORS.length];
-    mStyles['m'+p.dayIdx+'_'+p.k]=new TMap.MarkerStyle({width:34,height:46,anchor:{x:17,y:46},src:pinSvg(p.k+1,c)});
+    const m=pinMarker(p.k+1,c,p,p.name);
+    m.on('click',()=>showMarkerInfo(p));
+    return m;
   });
-  const geoms=shown.map(p=>({id:'m'+p.dayIdx+'_'+p.k,styleId:'m'+p.dayIdx+'_'+p.k,
-    position:new TMap.LatLng(p.lat,p.lng),properties:{p}}));
-  markerLayer=new TMap.MultiMarker({map:map,styles:mStyles,geometries:geoms});
+  map.add(markers);
+  markerLayer=markers;
   // 每天一条折线
-  const lStyles={},lGeoms=[];
+  const lines=[];
   Object.keys(byDay).forEach(k=>{
     const arr=byDay[k];
-    lStyles['d'+k]=polyStyle(DAY_COLORS[k%DAY_COLORS.length],false);
-    if(arr.length>1)lGeoms.push({id:'line'+k,styleId:'d'+k,paths:arr.map(p=>new TMap.LatLng(p.lat,p.lng))});
+    if(arr.length>1)lines.push(new AMap.Polyline(Object.assign({path:arr.map(pair)},polyStyle(DAY_COLORS[k%DAY_COLORS.length],false))));
   });
-  if(lGeoms.length)lineLayer=new TMap.MultiPolyline({map:map,styles:lStyles,geometries:lGeoms});
-  // 详情气泡
-  try{
-    if(!infoWin)infoWin=new TMap.InfoWindow({map:map,position:new TMap.LatLng(shown[0].lat,shown[0].lng),content:'',offset:{x:0,y:-34}});
-    infoWin.close();
-    markerLayer.on('click',evt=>{
-      const g=evt.geometry,p=g&&g.properties&&g.properties.p;if(!p)return;
-      const d=extractPlanDays(currentPlan)[p.dayIdx]||{};
-      const recs=(d.recommendations||[]).filter(x=>x&&x.name);
-      let slot='', hint='';
-      if(p.fromText){
-        slot=p.k===0?(d.morning||d.afternoon||''):(p.k===1?(d.afternoon||d.evening||''):(d.evening||''));
-      }else{
-        hint='<div class="iw-s" style="color:#9ca3af">建议打卡点（当天行程未点名具体景点）</div>';
-      }
-      var pphoto='';try{if(parent&&parent.spotPhoto)pphoto=parent.spotPhoto(p.name,(currentPlan&&currentPlan.city)||'','scenic')||'';}catch(e){}
-      const html='<div class="iw">'+(pphoto?'<img class="iw-img" src="'+pphoto+'" alt="">':'')+'<div class="iw-t">'+esc(p.name)+'</div>'+
-        '<div class="iw-d">第 '+p.day+' 天 · '+esc(p.title)+'</div>'+
-        (slot?'<div class="iw-s">'+esc(slot)+'</div>':hint)+
-        (p.fromText&&recs.length?'<div class="iw-p">🛒 '+recs.slice(0,2).map(x=>esc(x.name)+(x.price!=null?' ¥'+Number(x.price).toFixed(0):'')).join(' · ')+'</div>':'')+'</div>';
-      try{infoWin.setContent(html);infoWin.setPosition(g.position);infoWin.open();}
-      catch(e){setStatus('📍 第'+p.day+'天 · '+p.name+(slot?' — '+slot:''),'#047857');}
-    });
-  }catch(e){infoWin=null;}
+  if(lines.length){map.add(lines);lineLayer=lines;}
   fitPoints(shown);
 }
 function receivePlan(plan){
@@ -615,8 +647,8 @@ window.addEventListener('load',()=>{
 if(window.ResizeObserver){
   try{new ResizeObserver(()=>{
     if(!map){
-      if(initMap()&&pendingAction){const a=pendingAction;pendingAction=null;try{map.resize();}catch(e){}setTimeout(a,60);}
-    }else{try{map.resize();}catch(e){}}
+      if(initMap()&&pendingAction){const a=pendingAction;pendingAction=null;mapResize();setTimeout(a,60);}
+    }else{mapResize();}
   }).observe($('map'));}catch(e){}
 }
 // 接收父页面消息
@@ -624,7 +656,7 @@ window.addEventListener('message',e=>{
   const d=e.data||{};
   if(d.type==='ai-plan'){receivePlan(d.plan);}
   else if(d.type==='map-show'){
-    if(map){try{map.resize();}catch(e){}}
+    mapResize();
     if(mode==='plan'&&currentPlan&&!planDrawn)requestDraw(drawPlan);
     else if(mode==='free'&&!autoDrawn)requestDraw(()=>{autoDrawn=true;draw();});
   }

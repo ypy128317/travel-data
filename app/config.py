@@ -26,5 +26,7 @@ DASHSCOPE_BASE_URL = os.environ.get(
 ).rstrip("/")
 MODEL_NAME = os.environ.get("MODEL_NAME", "qwen-flash")
 
-# 腾讯地图 Key（后端注入，不暴露到前端源码）
-TMAP_KEY = os.environ.get("TMAP_KEY", "").strip()
+# 高德地图 Key + 安全密钥（后端注入，不暴露到前端源码）
+# JS API 2.0 强制要求 securityJsCode，两个都要配置地图才能加载
+AMAP_KEY = os.environ.get("AMAP_KEY", "").strip()
+AMAP_SECURITY_CODE = os.environ.get("AMAP_SECURITY_CODE", "").strip()

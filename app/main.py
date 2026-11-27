@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 
-from .config import APP_PORT, TMAP_KEY
+from .config import APP_PORT, AMAP_KEY, AMAP_SECURITY_CODE
 from .database import fetch_all, fetch_one
 from .routers import admin, ai, guides, orders, products, refunds, users
 
@@ -71,19 +71,21 @@ def admin_script() -> Response:
 @app.get("/map", tags=["meta"], include_in_schema=False, response_class=HTMLResponse)
 def map_page() -> HTMLResponse:
     """独立线路地图页：Key 从 .env 读取后注入，前端源码不含真实 Key。"""
-    if not TMAP_KEY:
+    if not AMAP_KEY or not AMAP_SECURITY_CODE:
         return HTMLResponse(
             """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <title>地图未配置</title><style>body{font-family:'Microsoft YaHei',sans-serif;max-width:640px;
 margin:60px auto;padding:24px;line-height:1.8;color:#1f2937}code{background:#f3f4f6;padding:2px 6px;border-radius:4px}
-a{color:#2563eb}</style></head><body><h2>🗺️ 地图 Key 尚未配置</h2>
-<p>请到 <a href="https://lbs.qq.com/dev/console/key/manage" target="_blank">腾讯位置服务控制台</a>
-免费申请 Key（创建时勾选 <b>WebServiceAPI</b>），然后填入项目根目录的 <code>.env</code> 文件：</p>
-<pre>TMAP_KEY=你的Key</pre><p>保存后重启服务，再访问本页即可。</p></body></html>""",
+a{color:#2563eb}</style></head><body><h2>🗺️ 高德地图 Key 尚未配置</h2>
+<p>请到 <a href="https://console.amap.com/dev/key/app" target="_blank">高德开放平台控制台</a>
+免费申请 Key：创建应用 → 添加 Key，服务平台选 <b>Web端(JS API)</b>，会同时拿到 <b>Key</b> 和 <b>安全密钥 securityJsCode</b>（JS API 2.0 两者缺一不可）。然后填入项目根目录的 <code>.env</code> 文件：</p>
+<pre>AMAP_KEY=你的Key
+AMAP_SECURITY_CODE=你的安全密钥</pre><p>保存后重启服务，再访问本页即可。</p></body></html>""",
             status_code=200,
         )
     html = (STATIC_DIR / "map_template.html").read_text(encoding="utf-8")
-    return HTMLResponse(html.replace("__TMAP_KEY__", TMAP_KEY))
+    html = html.replace("__AMAP_KEY__", AMAP_KEY).replace("__AMAP_SECURITY_CODE__", AMAP_SECURITY_CODE)
+    return HTMLResponse(html)
 
 
 @app.get("/api/meta/overview", tags=["meta"], include_in_schema=False)
