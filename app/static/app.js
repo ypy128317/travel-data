@@ -941,7 +941,7 @@ async function agentPlan(){
     // 步骤2：生成行程（复用真实 AI 接口）
     renderAgentSteps('doing','plan');
     const areaId=KB_AREA[info.city]||info.areaId||2;
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:info.pref}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city:info.city,days:info.days,budget:info.budget,preferences:info.pref,raw_input:q}});
     if(!r.ok){renderAgentSteps('done');toast('行程生成失败，请重试');return;}
     window.__planChat=[];
     applyPlanContext(r.data);
@@ -1203,7 +1203,7 @@ async function aiGeneratePlan(){
   box.innerHTML=`<div class="card"><div class="loading"><span class="spin"></span>AI 正在结合${isKb?'平台商品 + 旅游攻略知识':'平台真实商品'}规划行程… 已等待 <b id="ai-elapsed" style="color:var(--primary)">0</b> 秒</div><div class="note" style="margin-top:8px">首次生成约需 8-15 秒，请耐心等待，生成期间按钮已锁定，无需重复点击。</div></div>`;
   aiPlanTimer=setInterval(()=>{const el=document.getElementById('ai-elapsed');if(el)el.textContent=Math.round((Date.now()-t0)/1000);},1000);
   try{
-    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:pref}});
+    const r=await api('/api/ai/plan',{method:'POST',body:{areaId,city, days, budget, preferences:pref,raw_input:pref}});
     if(!r.ok){box.innerHTML=`<div class="card"><div class="empty">生成失败：${esc(JSON.stringify(r.data))}</div></div>`;return}
     window.__planChat=[];   // 新行程：清空微调对话历史
     applyPlanContext(r.data);
@@ -1247,6 +1247,35 @@ function renderAIPlan(d){
       <div style="margin-top:6px;font-size:11px;color:var(--muted)">数据来源：${esc(wx.source||'实时天气 API')} · 生成时通过工具调用拉取并注入 AI</div>
     </div>`;
   }
+  // 隐式需求识别卡片：AI 从原话里推断没说出口的约束，用户可一键采纳/忽略（关键节点主动确认）
+  let needsHtml='';
+  const needs=d.inferred_needs||[];
+  if(needs.length){
+    const needCards=needs.map((n,i)=>{
+      const col=['#7c3aed','#0369a1','#b45309','#047857'][i%4];
+      return `<div class="need-card" data-need="${i}" style="border-left:3px solid ${col};padding:10px 12px;margin:8px 0;background:#fff;border-radius:8px;border-top:1px solid #eef0ff;border-right:1px solid #eef0ff;border-bottom:1px solid #eef0ff">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <b style="color:${col};font-size:14px">✦ ${esc(n.need||'隐性需求')}</b>
+          <span class="api-tag" style="background:#ede9fe;color:#6d28d9">隐式识别</span>
+        </div>
+        <div style="margin-top:6px;font-size:12.5px;line-height:1.7;color:#475569">
+          <div>🔎 从你的描述「<b>${esc(n.from||'—')}</b>」推断</div>
+          <div>💭 ${esc(n.reason||'—')}</div>
+          <div>✅ 行程调整：${esc(n.adjusted||'—')}</div>
+        </div>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <button class="btn sm need-accept" data-i="${i}" style="background:#7c3aed;color:#fff;padding:3px 12px;font-size:12px">✓ 采纳</button>
+          <button class="btn sm ghost need-ignore" data-i="${i}" style="padding:3px 12px;font-size:12px">✗ 不用</button>
+        </div>
+      </div>`;
+    }).join('');
+    needsHtml=`<div class="card" style="border-color:#ddd6fe;background:linear-gradient(180deg,#faf8ff,#fff)" id="needs-card">
+      <h2>🔍 AI 识别到的隐性需求 <span class="api-tag" style="background:#ede9fe;color:#6d28d9">可解释 · 从你的话里推断</span></h2>
+      <p class="desc" style="margin:6px 0 10px">你没明说，AI 从描述里读出了这些约束，并已写进行程。如果判断有误，点「不用」即可忽略——不替你做主。</p>
+      ${needCards}
+      <div id="needs-feedback" style="font-size:12px;color:#6d28d9;margin-top:6px"></div>
+    </div>`;
+  }
   // 多人协作折中说明卡片（仅 group-plan 返回时渲染）
   let groupHtml='';
   if(d.is_group_plan){
@@ -1270,7 +1299,7 @@ function renderAIPlan(d){
   const recHtml=recs=>(recs||[]).filter(x=>x&&x.refId!=null).map(x=>
     `<span class="ai-rec" onclick="aiBuy(${x.refId},'${esc(x.type||'')}','${esc(x.name||'')}')">${esc(x.name||'商品')} ${x.price!=null?'¥'+Number(x.price).toFixed(0):''} →</span>`
   ).join('');
-  let html=`<div class="card" style="border-color:#fcd34d">${notice}${weatherHtml}${groupHtml}
+  let html=`<div class="card" style="border-color:#fcd34d">${notice}${weatherHtml}${needsHtml}${groupHtml}
     <h2>🗺️ ${esc(d.city||'')} ${esc(d.days||'')} 日行程 ${powered}</h2>
     <p style="color:var(--muted);margin:8px 0 4px">${esc(d.summary||'')}</p>
     <div style="margin-top:10px;font-size:13px">
@@ -1337,6 +1366,21 @@ function renderAIPlan(d){
     </div></div>`;
   html+='<div class="note">点击带价格的商品标签即可跳到下单流程，系统会自动带入商品参数。</div>';
   box.innerHTML=html;
+  // 隐式需求：关键节点主动确认（采纳/忽略），轻量交互不替用户做主
+  box.querySelectorAll('.need-accept,.need-ignore').forEach(btn=>{
+    btn.onclick=()=>{
+      const card=btn.closest('.need-card');
+      const i=+btn.dataset.i, need=(d.inferred_needs||[])[i]||{};
+      const accept=btn.classList.contains('need-accept');
+      if(card){card.style.opacity=accept?'1':'.5';card.style.borderLeftColor=accept?'#047857':'#9ca3af';
+        card.querySelectorAll('button').forEach(b=>b.disabled=true);}
+      const fb=document.getElementById('needs-feedback');
+      const done=box.querySelectorAll('.need-card button[disabled]').length;
+      const total=box.querySelectorAll('.need-card').length;
+      if(fb)fb.textContent=(accept?'✓ 已采纳「'+(need.need||'该需求')+'」，行程已按此调整':'✗ 已忽略「'+(need.need||'该需求')+'」')+'（'+done+'/'+total+' 项已确认）';
+      toast(accept?'✓ 已采纳，行程保持该调整':'✗ 已忽略该项调整');
+    };
+  });
 }
 /* AI 推荐商品 → 跳到下单：refId 已是房型/票种/服务ID，直接构造 suggest 结果 */
 async function aiBuy(refId,type,name){

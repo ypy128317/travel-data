@@ -213,6 +213,7 @@ class PlanRequest(BaseModel):
     days: int = Field(default=3, ge=1, le=7, description="行程天数")
     budget: float = Field(default=2000, gt=0, description="总预算（元）")
     preferences: str = Field(default="", description="偏好，如'历史文化、美食'")
+    raw_input: str = Field(default="", description="用户原始一句话（用于隐式需求识别，如'带老人去三亚'）")
 
 
 class ChatRequest(BaseModel):
@@ -301,6 +302,33 @@ def _collect_products(area_id: int, limit: int = 6) -> dict[str, list[dict[str, 
     return result
 
 
+def _local_infer_needs(req: "PlanRequest") -> list[dict[str, str]]:
+    """本地关键词兜底：从原话/偏好里识别隐性需求（AI 不可用或漏识别时用）。"""
+    text = f"{req.raw_input or ''} {req.preferences or ''}"
+    rules = [
+        (("老人", "长辈", "父母", "老年人", "带爸妈", "带老人"), "减少步行强度",
+         "长辈同行，体力有限", "避免爬山与长距离换乘，每天打卡不超过 3 个景点，安排午休与接驳"),
+        (("小孩", "儿童", "亲子", "带孩子", "带娃", "宝宝"), "亲子友好节奏",
+         "带孩子出行需要照顾作息", "安排午休时段、亲子友好景点，避免过晚活动与重辣餐饮"),
+        (("轮椅", "腿脚不便", "行动不便", "拄拐"), "无障碍通行",
+         "行动不便需无障碍设施", "优先无障碍景点、少台阶，优先安排接驳车"),
+        (("预算紧", "省钱", "学生", "穷游", "性价比", "便宜"), "性价比优先",
+         "预算有限要花在刀刃上", "优先免费/低价景点与性价比酒店，避开高价项目"),
+        (("怕爬山", "不想走太多", "轻松", "慢节奏", "休闲"), "轻松慢节奏",
+         "用户偏好轻松不赶路", "减少每日打卡数量，优先平地景点，留足自由活动时间"),
+        (("拍照", "摄影", "出片", "打卡"), "观景出片时段",
+         "用户重视拍照体验", "安排观景平台，把观景项目放在光线好的时段"),
+    ]
+    out: list[dict[str, str]] = []
+    for words, need, reason, adjusted in rules:
+        hit = next((w for w in words if w in text), None)
+        if hit:
+            out.append({"need": need, "from": f'识别到「{hit}」', "reason": reason, "adjusted": adjusted})
+        if len(out) >= 3:
+            break
+    return out
+
+
 def _fallback_plan(req: PlanRequest, products: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """无 Key / 调用失败时的本地降级行程，保证演示不中断。"""
     hotels = products["hotels"][:1]
@@ -324,6 +352,7 @@ def _fallback_plan(req: PlanRequest, products: dict[str, list[dict[str, Any]]]) 
         "days_plan": days_plan,
         "hotels": hotels, "estimated_cost": sum(s["price"] for s in scenics[:req.days]),
         "ai_powered": False,
+        "inferred_needs": _local_infer_needs(req),  # 降级也能展示隐式需求识别
     }
 
 
@@ -373,10 +402,24 @@ SYSTEM_PROMPT = """你是一位专业旅游规划师。基于我提供的真实�
   "hotels":[{"refId":商品ID,"name":"酒店名","type":"hotel","price":数字}],
   "estimated_cost": 预估总花费数字,
   "tips": "出行小贴士",
+  "inferred_needs": [
+    {"need":"识别出的隐性需求（如 减少步行强度）","from":"从用户哪句话/哪个词推断的（原话摘录，如 带老人）",
+     "reason":"为什么这句话意味着这个需求（一句话解释，让用户能看懂你的推理）",
+     "adjusted":"行程里为此做了什么具体调整（一句话，如 每天步行控制在3个景点内、安排接驳车）"}
+  ],
   "references":["引用的攻略出处字符串，如 三亚线路推荐.md"]
 }
 规则：
 0. 【实时数据优先】若我提供了【实时天气数据】，必须严格遵守其中的雨天/恶劣天气调整指令：有雨雪雾雷暴的日期把户外景点改为室内备选，并在安排或 tips 中说明；这是最高优先级的实时约束，优先于静态攻略里的户外推荐。
+0b. 【隐式需求识别·重要】仔细读用户输入和同行者描述，从字面之外推断没说出口的约束，输出到 inferred_needs。常见映射：
+   - "老人/长辈/父母(年纪大)" → 减少步行强度、避免爬山和长距离换乘、安排接驳车和午休、避开深夜转机；
+   - "小孩/儿童/亲子/带孩子" → 安排午休与亲子友好景点、避免过晚活动、餐饮口味温和；
+   - "轮椅/腿脚不便/行动不便" → 无障碍设施、少台阶、优先接驳；
+   - "预算紧/省钱/学生" → 优先性价比商品、免费景点、避开高价项目；
+   - "怕爬山/不想走太多/轻松点" → 平地景点、减少每日打卡数量；
+   - "拍照/摄影/出片" → 观景平台和光线好的时段。
+   只输出确实能从原话推断出的项（一般 1-3 条），不要凭空捏造；每条的 from 必须是用户原话里的词或短句，reason 要让普通用户一眼看懂推理逻辑。没有明显隐性需求时给空数组 []。
+   识别出的需求必须真正体现在 days_plan 的安排里（adjusted 要与行程一致），不能只说不做。
 1. 我会提供两类素材：【平台商品】(含可下单的 refId/价格) 和【旅游攻略知识】(景点特色、线路安排、交通美食等经验)。
 2. recommendations 和 hotels 中的 refId、name、price 必须来自【平台商品】，不得编造；若某类商品为空则给空数组。
 3. 每天的具体安排、游览顺序、体验亮点、注意事项，要充分吸收【旅游攻略知识】，让行程有理有据、有画面感。
@@ -428,7 +471,9 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
     )
     context = (
         f"目的地：{req.city}（areaId={req.areaId}），行程 {req.days} 天，"
-        f"预算 {req.budget:.0f} 元，用户偏好：{req.preferences or '无特殊偏好'}。\n\n"
+        f"预算 {req.budget:.0f} 元，用户偏好：{req.preferences or '无特殊偏好'}。\n"
+        f"用户原始描述（隐式需求识别的关键依据，请逐字分析其中的隐含约束）："
+        f"{req.raw_input or req.preferences or '无'}。\n\n"
         "=== 平台商品（可下单，refId 来自这里）===\n"
         "可选酒店：" + json.dumps(products["hotels"], ensure_ascii=False) + "\n"
         "可选景点：" + json.dumps(products["scenics"], ensure_ascii=False) + "\n"
@@ -461,6 +506,24 @@ async def ai_plan(req: PlanRequest) -> dict[str, Any]:
                 refs.append(label)
         data["references"] = refs
         data["kb_sources"] = kb_sources
+        # 隐式需求：AI 没给或格式不对时用本地关键词兜底，保证一定有可解释输出
+        inferred = data.get("inferred_needs")
+        if not isinstance(inferred, list) or not inferred:
+            inferred = _local_infer_needs(req)
+        else:
+            cleaned = []
+            for item in inferred:
+                if isinstance(item, dict) and item.get("need"):
+                    cleaned.append({
+                        "need": str(item.get("need", ""))[:60],
+                        "from": str(item.get("from", ""))[:60],
+                        "reason": str(item.get("reason", ""))[:160],
+                        "adjusted": str(item.get("adjusted", ""))[:160],
+                    })
+                if len(cleaned) >= 4:
+                    break
+            inferred = cleaned or _local_infer_needs(req)
+        data["inferred_needs"] = inferred
         # 硬性校正：保证返回的天数严格等于用户请求天数
         data = _force_day_count(data, req, products)
         return data
