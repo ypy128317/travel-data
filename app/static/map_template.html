@@ -106,6 +106,12 @@
   .play-progress i{display:block;height:100%;background:linear-gradient(90deg,#5b52ea,#38bdf8);width:0;transition:width 2.4s linear;border-radius:2px}
   .map-badge{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:600;padding:3px 8px;border-radius:999px;
     background:linear-gradient(135deg,#eef0ff,#e0f2fe);color:#4f46e5;border:1px solid #dbe3ff}
+  .poi-bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:12px;border-top:1px dashed #e6e9f2}
+  .poi-bar label{font-size:11.5px;color:#6b7280;font-weight:600;white-space:nowrap}
+  .poi-bar input{flex:1;min-width:180px}
+  .poi-bar select{min-width:110px}
+  .poi-hint{font-size:11px;color:#9ca3af;white-space:nowrap}
+  .tool-btn.on{background:#4f46e5;color:#fff;border-color:transparent}
 </style>
 <!-- 兼容 iframe 沙箱：localStorage/sessionStorage 不可用时提供内存实现 -->
 <script type="text/javascript">
@@ -130,12 +136,12 @@
 <script type="text/javascript">
   window._AMapSecurityConfig = { securityJsCode: "__AMAP_SECURITY_CODE__" };
 </script>
-<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.Scale,AMap.ControlBar,AMap.Geocoder,AMap.Driving,AMap.Walking"></script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.Scale,AMap.ControlBar,AMap.Geocoder,AMap.Driving,AMap.Walking,AMap.PlaceSearch"></script>
 </head>
 <body>
 <header>
   <h1>云游旅行 · 线路地图</h1>
-  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
+  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 实时路况 · POI 周边搜索 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
 </header>
 <div class="wrap">
   <div class="card modebar">
@@ -144,6 +150,7 @@
       <button id="tab-plan">AI 行程地图</button>
     </div>
     <button class="tool-btn" id="view-toggle" title="切换 2D / 3D 地图视角">◩ 3D 视角</button>
+    <button class="tool-btn" id="traffic-toggle" title="显示 / 隐藏实时路况">🚦 实时路况</button>
     <span class="map-badge">✦ 智能路线可视化</span>
     <span class="status" id="status"></span>
   </div>
@@ -167,6 +174,14 @@
       <button class="btn btn-ghost" id="preset">加载该城市景点</button>
     </div>
     <div class="legend" id="free-legend">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走高德地图实时地理编码，越具体越准。</div>
+    <div class="poi-bar">
+      <label>周边搜索</label>
+      <input id="poi-keyword" placeholder="输入关键词，如：餐厅、停车场、酒店" value="餐厅">
+      <select id="poi-type"><option value="">全部分类</option><option value="餐饮服务">餐饮</option><option value="住宿服务">酒店</option><option value="停车场">停车场</option><option value="购物中心">购物</option></select>
+      <button class="btn btn-ghost" id="poi-search">搜索周边</button>
+      <button class="tool-btn" id="poi-clear">清除</button>
+      <span class="poi-hint" id="poi-hint">以上一条打点的景点为中心 · 半径 3 km</span>
+    </div>
   </div>
 
   <!-- AI 行程控件 -->
@@ -246,6 +261,7 @@ let map=null, markerLayer=null, lineLayer=null, infoWin=null;
 let autoDrawn=false, pendingAction=null;
 let is3D=false, playTimer=null, playDays=[], playIdx=0;
 let mode='free', currentPlan=null, planPoints=[], planDrawn=false, activeDay=0, lastPlanUid='';
+let trafficOn=false, poiLayer=null, poiCenter=null;
 
 function initMap(){
   if(map)return true;
@@ -286,6 +302,64 @@ function clearLayers(){
   if(infoWin){try{infoWin.close();}catch(e){}}
 }
 function setStatus(txt,color){const s=$('status');s.textContent=txt||'';s.style.color=color||'#b45309';}
+
+// 实时路况：高德内置 setTraffic，无需额外插件
+function toggleTraffic(){
+  if(!initMap()){setStatus('地图尚未就绪','#b45309');return;}
+  trafficOn=!trafficOn;
+  try{map.setTraffic(trafficOn);}catch(e){setStatus('当前地图不支持路况图层','#b45309');trafficOn=!trafficOn;return;}
+  const b=$('traffic-toggle');
+  b.classList.toggle('on',trafficOn);
+  b.textContent=trafficOn?'🚦 路况已开':'🚦 实时路况';
+  setStatus(trafficOn?'✓ 实时路况已开启（红=拥堵 黄=缓行 绿=畅通）':'已关闭实时路况','#047857');
+}
+
+// POI 周边搜索：以最后绘制的打卡点为中心，半径 3km
+function searchPoi(){
+  if(!initMap()){setStatus('请先绘制线路或等待地图就绪','#b45309');return;}
+  const kw=($('poi-keyword').value||'').trim();
+  if(!kw){setStatus('请输入搜索关键词','#b45309');return;}
+  const type=$('poi-type').value;
+  // 中心优先用最后一个打卡点，否则用地图中心
+  let center=poiCenter||map.getCenter();
+  let lng=center.lng!=null?center.lng:(center.lat!=null?center[1]:null);
+  let lat=center.lat!=null?center.lat:(center[0]!=null?center[0]:null);
+  if(lng==null||lat==null){lng=109.5;lat=18.25;}
+  $('poi-hint').textContent='搜索中心 '+lat.toFixed(3)+','+lng.toFixed(3)+' · 半径 3 km';
+  clearPoi();
+  setStatus('🔍 正在搜索「'+kw+'」周边…','#4f46e5');
+  try{
+    const ps=new AMap.PlaceSearch({city:'全国',pageSize:20,extensions:'base'});
+    const q=(type?type+'|':'')+kw;
+    ps.searchNearBy(q,[lng,lat],3000,function(status,result){
+      if(status!=='complete'||!result||!result.poiList||!result.poiList.pois||!result.poiList.pois.length){
+        setStatus('未找到「'+kw+'」周边结果，换个关键词试试','#b45309');return;
+      }
+      const pois=result.poiList.pois;
+      const ms=pois.map(function(poi){
+        const m=new AMap.Marker({position:poi.location,title:poi.name,
+          label:{content:'<div style="background:#fff;color:#e11d48;border:1px solid #fecdd3;border-radius:4px;padding:1px 5px;font-size:11px;font-weight:600;white-space:nowrap">'+esc(poi.name)+'</div>',direction:'top'}});
+        m.on('click',function(){
+          try{
+            if(!infoWin)infoWin=new AMap.InfoWindow({content:'',offset:new AMap.Pixel(0,-30)});
+            const dist=poi.distance!=null?(' · 距中心约 '+poi.distance+' m'):'';
+            infoWin.setContent('<div class="iw"><div class="iw-t">📍 '+esc(poi.name)+'</div><div class="iw-d">'+esc(poi.address||'')+dist+'</div></div>');
+            infoWin.open(map,poi.location);
+          }catch(e){setStatus('📍 '+poi.name,'#047857');}
+        });
+        return m;
+      });
+      poiLayer=ms;
+      ms.forEach(function(m){map.add(m);});
+      setStatus('✓ 找到 '+ms.length+' 个「'+kw+'」周边结果，点击看详情','#047857');
+    });
+  }catch(e){setStatus('周边搜索失败：'+(e.message||e),'#b45309');}
+}
+function clearPoi(){
+  if(poiLayer&&poiLayer.length){poiLayer.forEach(function(m){try{map.remove(m);}catch(e){}});}
+  poiLayer=null;
+  if(infoWin){try{infoWin.close();}catch(e){}}
+}
 
 /* ===== 高德服务类 API 是回调式，包装成 Promise 复用原有 async 流程 ===== */
 function geocode(address,city){
@@ -359,6 +433,9 @@ async function draw(){
   });
   map.add(markers);
   markerLayer=markers;
+  // 记录最后一个打卡点作为 POI 搜索中心
+  poiCenter={lat:pts[pts.length-1].lat,lng:pts[pts.length-1].lng};
+  $('poi-hint').textContent='以「'+pts[pts.length-1].name+'」为中心 · 半径 3 km';
   const svcTravel=travel;
   let legs=[]; let realRoute=0;
   for(let i=0;i<pts.length-1;i++){
@@ -633,6 +710,10 @@ function togglePlay(){
 $('tab-free').onclick=()=>{stopPlay();setMode('free');};
 $('tab-plan').onclick=()=>setMode('plan');
 $('view-toggle').onclick=toggle3D;
+$('traffic-toggle').onclick=toggleTraffic;
+$('poi-search').onclick=searchPoi;
+$('poi-clear').onclick=()=>{clearPoi();setStatus('已清除周边搜索结果','#6b7280');};
+$('poi-keyword').onkeydown=(e)=>{if(e.key==='Enter')searchPoi();};
 $('draw').onclick=()=>{autoDrawn=true;initMap();draw();};
 $('preset').onclick=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');setMode('free');autoDrawn=false;requestDraw(()=>{autoDrawn=true;draw();});};
 $('city').onchange=()=>{$('spots').value=(PRESETS[$('city').value]||[]).join(',');autoDrawn=false;requestDraw(()=>{autoDrawn=true;draw();});};
