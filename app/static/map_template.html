@@ -261,7 +261,7 @@ let map=null, markerLayer=null, lineLayer=null, infoWin=null;
 let autoDrawn=false, pendingAction=null;
 let is3D=false, playTimer=null, playDays=[], playIdx=0;
 let mode='free', currentPlan=null, planPoints=[], planDrawn=false, activeDay=0, lastPlanUid='';
-let trafficOn=false, poiLayer=null, poiCenter=null;
+let trafficOn=false, trafficLayer=null, poiLayer=null, poiCenter=null;
 
 function initMap(){
   if(map)return true;
@@ -303,11 +303,23 @@ function clearLayers(){
 }
 function setStatus(txt,color){const s=$('status');s.textContent=txt||'';s.style.color=color||'#b45309';}
 
-// 实时路况：高德内置 setTraffic，无需额外插件
+// 实时路况：高德 2.0 用 TileLayer.Traffic 图层（不是 setTraffic，那是百度的方法）
 function toggleTraffic(){
   if(!initMap()){setStatus('地图尚未就绪','#b45309');return;}
-  trafficOn=!trafficOn;
-  try{map.setTraffic(trafficOn);}catch(e){setStatus('当前地图不支持路况图层','#b45309');trafficOn=!trafficOn;return;}
+  try{
+    if(trafficLayer){
+      map.remove(trafficLayer);trafficLayer=null;trafficOn=false;
+    }else{
+      if(typeof AMap.TileLayer==='undefined'||!AMap.TileLayer.Traffic){
+        // 老脚本可能没带图层类，动态补载
+        setStatus('路况图层加载中…','#4f46e5');
+        AMap.plugin(['AMap.TileLayer.Traffic'],function(){toggleTraffic();});
+        return;
+      }
+      trafficLayer=new AMap.TileLayer.Traffic({autoRefresh:true,interval:180});
+      map.add(trafficLayer);trafficOn=true;
+    }
+  }catch(e){setStatus('路况图层失败：'+(e.message||e),'#b45309');return;}
   const b=$('traffic-toggle');
   b.classList.toggle('on',trafficOn);
   b.textContent=trafficOn?'🚦 路况已开':'🚦 实时路况';
