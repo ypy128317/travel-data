@@ -141,7 +141,7 @@
 <body>
 <header>
   <h1>云游旅行 · 线路地图</h1>
-  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 🚗 小车轨迹回放 · 🛰️ 卫星影像 · 实时路况 · POI 周边搜索 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
+  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 🚗 小车轨迹回放 · 🛰️ 卫星影像 · 实时路况 · POI 周边搜索（AI 行程也能查饭店酒店）· 高德地图（GCJ-02）· Key 由后端安全注入</p>
 </header>
 <div class="wrap">
   <div class="card modebar">
@@ -176,13 +176,17 @@
       <button class="btn btn-ghost" id="preset">加载该城市景点</button>
     </div>
     <div class="legend" id="free-legend">提示：内置 6 城市景点用真实坐标直接打点；自定义景点走高德地图实时地理编码，越具体越准。</div>
-    <div class="poi-bar">
+  </div>
+
+  <!-- 周边搜索：自由绘制 / AI 行程两种模式共用 -->
+  <div class="card" id="poi-controls">
+    <div class="poi-bar" style="margin-top:0;padding-top:0;border-top:0">
       <label>周边搜索</label>
       <input id="poi-keyword" placeholder="输入关键词，如：餐厅、停车场、酒店" value="餐厅">
       <select id="poi-type"><option value="">全部分类</option><option value="餐饮服务">餐饮</option><option value="住宿服务">酒店</option><option value="停车场">停车场</option><option value="购物中心">购物</option></select>
       <button class="btn btn-ghost" id="poi-search">搜索周边</button>
       <button class="tool-btn" id="poi-clear">清除</button>
-      <span class="poi-hint" id="poi-hint">以上一条打点的景点为中心 · 半径 3 km</span>
+      <span class="poi-hint" id="poi-hint">自由绘制：以上一条打点为中心 · AI 行程：以当前天最后打卡点为中心 · 半径 3 km</span>
     </div>
   </div>
 
@@ -419,18 +423,33 @@ function replayRoute(){
   }else start();
 }
 
-// POI 周边搜索：以最后绘制的打卡点为中心，半径 3km
+// POI 周边搜索：AI 行程以当前天最后打卡点为中心；自由绘制以上一条打点为中心
+function quickPoi(kw,type){
+  $('poi-keyword').value=kw;
+  $('poi-type').value=type;
+  try{$('poi-controls').scrollIntoView({behavior:'smooth',block:'center'});}catch(e){}
+  searchPoi();
+}
 function searchPoi(){
   if(!initMap()){setStatus('请先绘制线路或等待地图就绪','#b45309');return;}
   const kw=($('poi-keyword').value||'').trim();
   if(!kw){setStatus('请输入搜索关键词','#b45309');return;}
   const type=$('poi-type').value;
-  // 中心优先用最后一个打卡点，否则用地图中心
-  let center=poiCenter||map.getCenter();
+  // AI 行程模式：用当前筛选天的最后一个打卡点（未筛选则全程最后一个）；自由绘制：用最后打点或地图中心
+  let center=null,scope='';
+  if(mode==='plan'&&planPoints.length){
+    const shown=activeDay?planPoints.filter(p=>p.dayIdx===activeDay-1):planPoints;
+    if(shown.length){
+      const p=shown[shown.length-1];
+      center={lng:p.lng,lat:p.lat};
+      scope=activeDay?('AI 行程 · 第 '+activeDay+' 天'):'AI 行程 · 全程';
+    }
+  }
+  if(!center)center=poiCenter||map.getCenter();
   let lng=center.lng!=null?center.lng:(center.lat!=null?center[1]:null);
   let lat=center.lat!=null?center.lat:(center[0]!=null?center[0]:null);
   if(lng==null||lat==null){lng=109.5;lat=18.25;}
-  $('poi-hint').textContent='搜索中心 '+lat.toFixed(3)+','+lng.toFixed(3)+' · 半径 3 km';
+  $('poi-hint').textContent=(scope?scope+' · ':'')+'搜索中心 '+lat.toFixed(3)+','+lng.toFixed(3)+' · 半径 3 km';
   clearPoi();
   setStatus('🔍 正在搜索「'+kw+'」周边…','#4f46e5');
   try{
@@ -497,6 +516,7 @@ function fetchRoute(from,to,travel){
 
 /* ==================== 模式切换 ==================== */
 function setMode(m){
+  if(m!==mode){try{clearPoi();$('poi-hint').textContent='周边搜索 · 半径 3 km';}catch(e){}}
   mode=m;
   $('tab-free').classList.toggle('active',m==='free');
   $('tab-plan').classList.toggle('active',m==='plan');
@@ -634,6 +654,8 @@ function buildPlanUI(plan,days){
       days.map((d,i)=>'<button data-day="'+(i+1)+'"><span class="dot" style="background:'+d.color+'"></span>第 '+d.day+' 天</button>').join('')+
     '</div>'+
     '<div class="plan-actions"><button id="play-tour" class="tool-btn">▶ 自动播放行程</button>'+
+      '<button id="nearby-food" class="tool-btn">🍽️ 附近美食</button>'+
+      '<button id="nearby-hotel" class="tool-btn">🏨 附近酒店</button>'+
       '<button id="back-ai">← 回 AI 行程助手调整</button>'+
       '<button id="re-draw">重新绘制</button></div>'+
     '<div class="play-progress" id="play-progress-wrap"><i id="play-bar"></i></div>';
@@ -665,6 +687,8 @@ function buildPlanUI(plan,days){
   $('back-ai').onclick=()=>{try{parent.postMessage({type:'goto-ai'},'*');}catch(e){}};
   $('re-draw').onclick=()=>{stopPlay();planPoints=[];planDrawn=false;requestDraw(drawPlan);};
   $('play-tour').onclick=togglePlay;
+  $('nearby-food').onclick=()=>quickPoi('餐厅','餐饮服务');
+  $('nearby-hotel').onclick=()=>quickPoi('酒店','住宿服务');
   $('timeline').style.display='';
   // 图例
   $('legend').innerHTML='<span style="color:#6b7280;font-weight:600">按天着色：</span>'+
