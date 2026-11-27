@@ -136,12 +136,12 @@
 <script type="text/javascript">
   window._AMapSecurityConfig = { securityJsCode: "__AMAP_SECURITY_CODE__" };
 </script>
-<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.Scale,AMap.ControlBar,AMap.Geocoder,AMap.Driving,AMap.Walking,AMap.PlaceSearch"></script>
+<script src="https://webapi.amap.com/maps?v=2.0&key=__AMAP_KEY__&plugin=AMap.Scale,AMap.ControlBar,AMap.Geocoder,AMap.Driving,AMap.Walking,AMap.PlaceSearch,AMap.MoveAnimation"></script>
 </head>
 <body>
 <header>
   <h1>云游旅行 · 线路地图</h1>
-  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 实时路况 · POI 周边搜索 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
+  <p>景点打点连线 · 按天着色的 AI 行程地图 · 3D 视角 · 行程自动播放 · 🚗 小车轨迹回放 · 🛰️ 卫星影像 · 实时路况 · POI 周边搜索 · 高德地图（GCJ-02）· Key 由后端安全注入</p>
 </header>
 <div class="wrap">
   <div class="card modebar">
@@ -151,6 +151,8 @@
     </div>
     <button class="tool-btn" id="view-toggle" title="切换 2D / 3D 地图视角">◩ 3D 视角</button>
     <button class="tool-btn" id="traffic-toggle" title="显示 / 隐藏实时路况">🚦 实时路况</button>
+    <button class="tool-btn" id="satellite-toggle" title="切换标准地图 / 卫星影像">🛰️ 卫星图</button>
+    <button class="tool-btn" id="car-toggle" title="小车沿行程路线行驶动画">🚗 轨迹回放</button>
     <span class="map-badge">✦ 智能路线可视化</span>
     <span class="status" id="status"></span>
   </div>
@@ -262,6 +264,8 @@ let autoDrawn=false, pendingAction=null;
 let is3D=false, playTimer=null, playDays=[], playIdx=0;
 let mode='free', currentPlan=null, planPoints=[], planDrawn=false, activeDay=0, lastPlanUid='';
 let trafficOn=false, trafficLayer=null, poiLayer=null, poiCenter=null;
+let satelliteOn=false, satelliteLayer=null, roadNetLayer=null;
+let carMarker=null, carMoving=false, routePath=[];
 
 function initMap(){
   if(map)return true;
@@ -297,7 +301,11 @@ function parseHash(){
   return true;
 }
 function clearLayers(){
-  [markerLayer,lineLayer].forEach(L=>{if(L){try{map.remove(L);}catch(e){}}});
+  stopCar(); // 重绘前停掉小车动画，避免残留在旧线路上
+  [markerLayer,lineLayer].forEach(L=>{
+    const arr=Array.isArray(L)?L:[L];
+    arr.forEach(x=>{if(x){try{map.remove(x);}catch(e){}}});
+  });
   markerLayer=lineLayer=null;
   if(infoWin){try{infoWin.close();}catch(e){}}
 }
@@ -324,6 +332,91 @@ function toggleTraffic(){
   b.classList.toggle('on',trafficOn);
   b.textContent=trafficOn?'🚦 路况已开':'🚦 实时路况';
   setStatus(trafficOn?'✓ 实时路况已开启（红=拥堵 黄=缓行 绿=畅通）':'已关闭实时路况','#047857');
+}
+
+// 卫星影像切换：标准图 / 卫星影像互斥，路网作为叠加层
+function toggleSatellite(){
+  if(!initMap()){setStatus('地图尚未就绪','#b45309');return;}
+  const apply=()=>{
+    try{
+      if(satelliteOn){
+        if(satelliteLayer){map.remove(satelliteLayer);satelliteLayer=null;}
+        if(roadNetLayer){map.remove(roadNetLayer);roadNetLayer=null;}
+        satelliteOn=false;
+      }else{
+        satelliteLayer=new AMap.TileLayer.Satellite();
+        roadNetLayer=new AMap.TileLayer.RoadNet();
+        map.add(satelliteLayer);map.add(roadNetLayer);
+        satelliteOn=true;
+      }
+    }catch(e){setStatus('卫星图切换失败：'+(e.message||e),'#b45309');return;}
+    const b=$('satellite-toggle');
+    b.classList.toggle('on',satelliteOn);
+    b.textContent=satelliteOn?'🛰️ 卫星已开':'🛰️ 卫星图';
+    setStatus(satelliteOn?'✓ 已切换卫星影像 + 路网（再点切回标准图）':'已切回标准地图','#047857');
+  };
+  if(typeof AMap.TileLayer==='undefined'||!AMap.TileLayer.Satellite){
+    setStatus('卫星图层加载中…','#4f46e5');
+    AMap.plugin(['AMap.TileLayer.Satellite','AMap.TileLayer.RoadNet'],apply);
+    return;
+  }
+  apply();
+}
+
+// 收集当前线路的路径点（自由绘制 / AI 行程都支持）
+function currentRoutePath(){
+  let path=[];
+  try{
+    const Ls=Array.isArray(lineLayer)?lineLayer:(lineLayer?[lineLayer]:[]);
+    Ls.forEach(L=>{const p=L.getPath&&L.getPath();if(p&&p.length)path=path.concat(p);});
+  }catch(e){}
+  return path;
+}
+// 小车俯视图标
+function carSvg(){
+  const svg='<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">'+
+    '<circle cx="14" cy="14" r="13" fill="#fff" stroke="#4f46e5" stroke-width="2"/>'+
+    '<rect x="10" y="8" width="8" height="12" rx="3" fill="#4f46e5"/>'+
+    '<circle cx="14" cy="14" r="2.4" fill="#fff"/></svg>';
+  return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+}
+function stopCar(){
+  carMoving=false;
+  if(carMarker){try{carMarker.stopMove();}catch(e){}try{map.remove(carMarker);}catch(e){}carMarker=null;}
+  const b=$('car-toggle');
+  if(b){b.classList.remove('on');b.textContent='🚗 轨迹回放';}
+}
+// 轨迹回放：小车沿当前线路行驶（高德 MoveAnimation 插件）
+function replayRoute(){
+  if(!initMap()){setStatus('地图尚未就绪','#b45309');return;}
+  if(carMoving){stopCar();setStatus('已停止轨迹回放','#6b7280');return;}
+  const path=currentRoutePath();
+  if(path.length<2){setStatus('请先绘制线路或生成行程，再来回放轨迹','#b45309');return;}
+  routePath=path;
+  const start=()=>{
+    stopCar();
+    try{
+      carMarker=new AMap.Marker({
+        position:path[0],
+        content:'<img src="'+carSvg()+'" alt="" style="width:28px;height:28px;display:block">',
+        offset:new AMap.Pixel(-14,-14),
+        autoRotation:true,
+        zIndex:300
+      });
+      map.add(carMarker);
+      const dur=Math.max(2600,path.length*95); // 按点数自适应时长
+      carMarker.moveAlong(path,{duration:dur,autoRotation:true,circlable:false});
+      carMoving=true;
+      const b=$('car-toggle');b.classList.add('on');b.textContent='🚗 停止回放';
+      setStatus('🚗 小车沿行程路线出发，演示完整线路…','#4f46e5');
+      try{carMarker.on('moveend',()=>{if(carMoving){setStatus('✓ 轨迹回放完成','#047857');stopCar();}});}catch(e){}
+    }catch(e){stopCar();setStatus('轨迹回放失败：'+(e.message||e),'#b45309');}
+  };
+  const proto=window.AMap&&AMap.Marker&&AMap.Marker.prototype;
+  if(!proto||typeof proto.moveAlong!=='function'){
+    setStatus('动画插件加载中…','#4f46e5');
+    AMap.plugin(['AMap.MoveAnimation'],start);
+  }else start();
 }
 
 // POI 周边搜索：以最后绘制的打卡点为中心，半径 3km
@@ -723,6 +816,8 @@ $('tab-free').onclick=()=>{stopPlay();setMode('free');};
 $('tab-plan').onclick=()=>setMode('plan');
 $('view-toggle').onclick=toggle3D;
 $('traffic-toggle').onclick=toggleTraffic;
+$('satellite-toggle').onclick=toggleSatellite;
+$('car-toggle').onclick=replayRoute;
 $('poi-search').onclick=searchPoi;
 $('poi-clear').onclick=()=>{clearPoi();setStatus('已清除周边搜索结果','#6b7280');};
 $('poi-keyword').onkeydown=(e)=>{if(e.key==='Enter')searchPoi();};
